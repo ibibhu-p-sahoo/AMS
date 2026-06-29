@@ -9,6 +9,7 @@ from .models import (
     JobIntelResponse,
     JobPosting,
     MessageTemplate,
+    Notification,
     OutreachCampaign,
     OutreachContact,
     ReferralLead,
@@ -182,6 +183,16 @@ class JobPostingSerializer(serializers.ModelSerializer):
             "is_open", "created_at",
         ]
         read_only_fields = ["posted_by"]
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = [
+            "id", "kind", "title", "message", "link", "is_read", "created_at",
+        ]
+        # Content is set server-side; only is_read is client-writable (mark read).
+        read_only_fields = ["kind", "title", "message", "link", "created_at"]
 
 
 class AuditLogSerializer(serializers.ModelSerializer):

@@ -8,6 +8,7 @@ from .models import (
     EventParticipant,
     JobIntelResponse,
     MessageTemplate,
+    Notification,
     OutreachCampaign,
     OutreachContact,
     ReferralLead,
@@ -84,6 +85,13 @@ class JobIntelResponseAdmin(admin.ModelAdmin):
 class TaskAdmin(admin.ModelAdmin):
     list_display = ("title", "team", "assignee", "due_date", "status")
     list_filter = ("team", "status")
+
+
+@admin.register(Notification)
+class NotificationAdmin(admin.ModelAdmin):
+    list_display = ("title", "recipient", "kind", "is_read", "created_at")
+    list_filter = ("kind", "is_read")
+    search_fields = ("title", "message", "recipient__email")
 
 
 @admin.register(AuditLog)

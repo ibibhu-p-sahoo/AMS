@@ -3,6 +3,8 @@ import { useAuth } from "./lib/auth";
 import { canAccess } from "./lib/access";
 import Layout from "./components/Layout";
 import Login from "./pages/Login";
+import ForgotPassword from "./pages/ForgotPassword";
+import ResetPassword from "./pages/ResetPassword";
 import Dashboard from "./pages/Dashboard";
 import Alumni from "./pages/Alumni";
 import Students from "./pages/Students";
@@ -32,6 +34,8 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
       {/* Public, no-login forms (PRD §8) */}
       <Route path="/forms/pulse" element={<PublicPulse />} />
       <Route path="/forms/rsvp" element={<PublicRsvp />} />

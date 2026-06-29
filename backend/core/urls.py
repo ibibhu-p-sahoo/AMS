@@ -12,6 +12,7 @@ from .views import (
     JobIntelResponseViewSet,
     JobPostingViewSet,
     MessageTemplateViewSet,
+    NotificationViewSet,
     OutreachCampaignViewSet,
     OutreachContactViewSet,
     ReferralLeadViewSet,
@@ -32,6 +33,7 @@ router.register("referrals", ReferralLeadViewSet)
 router.register("job-intel", JobIntelResponseViewSet)
 router.register("jobs", JobPostingViewSet)
 router.register("tasks", TaskViewSet)
+router.register("notifications", NotificationViewSet, basename="notification")
 router.register("audit-log", AuditLogViewSet)
 
 urlpatterns = [

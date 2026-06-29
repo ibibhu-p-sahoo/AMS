@@ -2,6 +2,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { ReactNode } from "react";
 import { useAuth } from "../lib/auth";
 import { canAccess } from "../lib/access";
+import NotificationBell from "./NotificationBell";
 
 const NAV: { to: string; label: string; icon: string }[] = [
   { to: "/", label: "Dashboard", icon: "📊" },
@@ -70,6 +71,9 @@ export default function Layout({ children }: { children: ReactNode }) {
         </div>
       </aside>
       <main className="flex-1 overflow-y-auto">
+        <header className="flex items-center justify-end border-b border-slate-200 bg-white px-8 py-3">
+          <NotificationBell />
+        </header>
         <div className="mx-auto max-w-7xl animate-[fadein_0.25s_ease-out] px-8 py-8">{children}</div>
       </main>
     </div>

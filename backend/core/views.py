@@ -1,8 +1,9 @@
 from django.core.mail import send_mail
 from django.db.models import Count, Q
 from django.utils import timezone
-from rest_framework import status, viewsets
+from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -21,12 +22,14 @@ from .models import (
     JobIntelResponse,
     JobPosting,
     MessageTemplate,
+    Notification,
     OutreachCampaign,
     OutreachContact,
     ReferralLead,
     Student,
     Task,
 )
+from .notifications import notify_all_users, notify_users
 from .serializers import (
     AlumniSerializer,
     AuditLogSerializer,
@@ -36,6 +39,7 @@ from .serializers import (
     JobIntelResponseSerializer,
     JobPostingSerializer,
     MessageTemplateSerializer,
+    NotificationSerializer,
     OutreachCampaignSerializer,
     OutreachContactSerializer,
     ReferralLeadSerializer,
@@ -326,6 +330,15 @@ class EventViewSet(AuditedModelViewSet):
                 # Broker unavailable → run inline so event creation still succeeds.
                 send_event_announcement(instance.id)
 
+            # In-app broadcast to every user (PRD §3 Notifications).
+            when = timezone.localtime(instance.date).strftime("%d %b %Y, %I:%M %p")
+            notify_all_users(
+                title=f"New event: {instance.title}",
+                message=f"{when} · {instance.venue or 'TBA'}",
+                link="/events",
+                kind=Notification.Kind.EVENT,
+            )
+
 
 class EventParticipantViewSet(AuditedModelViewSet):
     queryset = EventParticipant.objects.select_related("event").all()
@@ -371,6 +384,29 @@ class TaskViewSet(AuditedModelViewSet):
     ordering_fields = ["due_date", "created_at"]
     write_roles = {Role.ADMIN, Role.COORDINATOR, Role.VOLUNTEER}
 
+    def _notify_assignee(self, task, title):
+        # Ping the assignee — but never notify someone about their own action.
+        if task.assignee_id and task.assignee_id != self.request.user.id:
+            notify_users(
+                [task.assignee],
+                title=title,
+                message=task.title,
+                link="/tasks",
+                kind=Notification.Kind.TASK,
+            )
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        self._log("created", instance)
+        self._notify_assignee(instance, "You have a new task")
+
+    def perform_update(self, serializer):
+        prev_assignee = serializer.instance.assignee_id
+        instance = serializer.save()
+        self._log("updated", instance)
+        if instance.assignee_id != prev_assignee:
+            self._notify_assignee(instance, "A task was assigned to you")
+
 
 class JobPostingViewSet(AuditedModelViewSet):
     queryset = JobPosting.objects.select_related("posted_by").all()
@@ -386,6 +422,48 @@ class JobPostingViewSet(AuditedModelViewSet):
     def perform_create(self, serializer):
         instance = serializer.save(posted_by=self.request.user)
         self._log("created", instance)
+        # The job board is visible to everyone → broadcast new openings.
+        notify_all_users(
+            title=f"New job: {instance.title}",
+            message=f"{instance.company} · {instance.location or 'Remote'}",
+            link="/jobs",
+            kind=Notification.Kind.JOB,
+            exclude=self.request.user,
+        )
+
+
+class NotificationViewSet(
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    mixins.DestroyModelMixin,
+    viewsets.GenericViewSet,
+):
+    """Each user's own notification inbox — list, mark read, dismiss."""
+
+    serializer_class = NotificationSerializer
+    permission_classes = [IsAuthenticated]
+    filterset_fields = ["is_read", "kind"]
+    ordering_fields = ["created_at"]
+
+    def get_queryset(self):
+        return Notification.objects.filter(recipient=self.request.user)
+
+    @action(detail=False, methods=["get"])
+    def unread_count(self, request):
+        return Response({"unread": self.get_queryset().filter(is_read=False).count()})
+
+    @action(detail=False, methods=["post"])
+    def mark_all_read(self, request):
+        updated = self.get_queryset().filter(is_read=False).update(is_read=True)
+        return Response({"marked": updated})
+
+    @action(detail=True, methods=["post"])
+    def read(self, request, pk=None):
+        notif = self.get_object()
+        if not notif.is_read:
+            notif.is_read = True
+            notif.save(update_fields=["is_read", "updated_at"])
+        return Response(self.get_serializer(notif).data)
 
 
 class AuditLogViewSet(viewsets.ReadOnlyModelViewSet):
