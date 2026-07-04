@@ -15,11 +15,19 @@ class JobPosting(TimeStamped):
         HYBRID = "hybrid", "Hybrid"
         REMOTE = "remote", "Remote"
 
+    class EmploymentType(models.TextChoices):
+        FULLTIME = "fulltime", "Full Time"
+        PARTTIME = "parttime", "Part Time"
+        INTERNSHIP = "internship", "Internship"
+
     title = models.CharField(max_length=200)
     company = models.CharField(max_length=200)
     location = models.CharField(max_length=150, blank=True)
     work_mode = models.CharField(
         max_length=10, choices=WorkMode.choices, default=WorkMode.ONSITE
+    )
+    employment_type = models.CharField(
+        max_length=12, choices=EmploymentType.choices, default=EmploymentType.FULLTIME
     )
     description = models.TextField()
     apply_url = models.CharField(

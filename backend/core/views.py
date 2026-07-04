@@ -420,7 +420,7 @@ class JobPostingViewSet(AuditedModelViewSet):
     audit_entity = "JobPosting"
     permission_classes = [OwnerOrStaffWritePermission]
     search_fields = ["title", "company", "location"]
-    filterset_fields = ["work_mode", "is_open"]
+    filterset_fields = ["work_mode", "employment_type", "is_open"]
     ordering_fields = ["created_at", "title"]
     # Alumni can post jobs too; any logged-in member can read them.
     write_roles = {Role.ADMIN, Role.COORDINATOR, Role.VOLUNTEER, Role.ALUMNUS}
@@ -435,6 +435,37 @@ class JobPostingViewSet(AuditedModelViewSet):
             link="/jobs",
             kind=Notification.Kind.JOB,
             exclude=self.request.user,
+        )
+
+    @action(detail=False, methods=["get"])
+    def stats(self, request):
+        """Aggregate figures for the Jobs & Internships header + sidebar."""
+        qs = JobPosting.objects.all()
+        month_start = timezone.now().replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        total = qs.count()
+        internships = qs.filter(
+            employment_type=JobPosting.EmploymentType.INTERNSHIP
+        ).count()
+        companies = qs.values("company").distinct().count()
+        open_jobs = qs.filter(is_open=True).count()
+        new_this_month = qs.filter(created_at__gte=month_start).count()
+
+        top_companies = list(
+            qs.values("company")
+            .annotate(openings=Count("id"))
+            .order_by("-openings")[:5]
+        )
+        return Response(
+            {
+                "total": total,
+                "internships": internships,
+                "companies": companies,
+                "open_jobs": open_jobs,
+                "new_this_month": new_this_month,
+                "top_companies": top_companies,
+            }
         )
 
 
@@ -542,6 +573,61 @@ class DashboardView(APIView):
             for log in recent_logs
         ]
 
+        # ── month-over-month growth (real %) ──
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if month_start.month == 1:
+            prev_month_start = month_start.replace(year=month_start.year - 1, month=12)
+        else:
+            prev_month_start = month_start.replace(month=month_start.month - 1)
+
+        def mom_pct(model):
+            this_m = model.objects.filter(created_at__gte=month_start).count()
+            prev_m = model.objects.filter(
+                created_at__gte=prev_month_start, created_at__lt=month_start
+            ).count()
+            if prev_m:
+                return round(((this_m - prev_m) / prev_m) * 100, 1)
+            return None
+
+        # ── alumni by location (top cities) ──
+        loc_rows = list(
+            Alumni.objects.exclude(city="").values("city")
+            .annotate(count=Count("id")).order_by("-count")
+        )
+        by_location = [{"label": r["city"], "value": r["count"]} for r in loc_rows[:6]]
+        other_loc = sum(r["count"] for r in loc_rows[6:])
+        if other_loc:
+            by_location.append({"label": "Others", "value": other_loc})
+
+        # ── events this month (with RSVP counts) ──
+        month_events = (
+            Event.objects.filter(date__gte=month_start)
+            .annotate(pcount=Count("participants"))
+            .order_by("date")[:5]
+        )
+        events_this_month = [
+            {
+                "id": e.id, "title": e.title, "type": e.type,
+                "date": e.date.isoformat() if e.date else None,
+                "venue": e.venue, "participant_count": e.pcount,
+            }
+            for e in month_events
+        ]
+
+        # ── top hiring companies ──
+        top_companies = list(
+            JobPosting.objects.values("company")
+            .annotate(openings=Count("id")).order_by("-openings")[:5]
+        )
+
+        # ── jobs by employment type (donut) ──
+        type_labels = dict(JobPosting.EmploymentType.choices)
+        jobs_by_type = [
+            {"label": type_labels.get(r["employment_type"], r["employment_type"]), "value": r["count"]}
+            for r in JobPosting.objects.values("employment_type")
+            .annotate(count=Count("id")).order_by("-count")
+        ]
+
         data = {
             "jobs_open": JobPosting.objects.filter(is_open=True).count(),
             "users_total": get_user_model().objects.count(),
@@ -549,6 +635,14 @@ class DashboardView(APIView):
             "alumni_total": Alumni.objects.count(),
             "alumni_active": Alumni.objects.filter(status="active").count(),
             "super_alumni": Alumni.objects.filter(is_super_alumni=True).count(),
+            "jobs_total": JobPosting.objects.count(),
+            "alumni_delta_pct": mom_pct(Alumni),
+            "events_delta_pct": mom_pct(Event),
+            "jobs_delta_pct": mom_pct(JobPosting),
+            "alumni_by_location": by_location,
+            "events_this_month": events_this_month,
+            "top_companies": top_companies,
+            "jobs_by_type": jobs_by_type,
             "students_total": Student.objects.count(),
             "companies_total": Company.objects.count(),
             "companies_in_placement": Company.objects.filter(is_in_placement_list=True).count(),
@@ -572,3 +666,142 @@ class DashboardView(APIView):
             "recent_activities": recent_activities,
         }
         return Response(data)
+
+
+class AnalyticsView(APIView):
+    """Reports & Analytics — richer aggregates for the reporting dashboard."""
+
+    permission_classes = [RolePermission]
+    read_roles = {Role.ADMIN, Role.COORDINATOR, Role.VOLUNTEER}
+
+    def get(self, request):
+        from django.db.models.functions import TruncMonth
+
+        now = timezone.now()
+        year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        last_year_start = year_start.replace(year=year_start.year - 1)
+        months_short = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+
+        def pct(new_this, prior):
+            if prior:
+                return round((new_this / prior) * 100, 1)
+            return None
+
+        def monthly_series(qs, label):
+            """Count of rows created per month (current year) → chart-ready list."""
+            rows = (
+                qs.filter(created_at__gte=year_start)
+                .annotate(month=TruncMonth("created_at"))
+                .values("month")
+                .annotate(count=Count("id"))
+            )
+            m = {r["month"].month: r["count"] for r in rows}
+            return [{"month": months_short[i - 1], label: m.get(i, 0)} for i in range(1, now.month + 1)]
+
+        # ── KPI cards with real YoY growth ──
+        alumni_qs = Alumni.objects.all()
+        alumni_this_year = alumni_qs.filter(created_at__gte=year_start).count()
+        alumni_last_year = alumni_qs.filter(
+            created_at__gte=last_year_start, created_at__lt=year_start
+        ).count()
+        events_this_year = Event.objects.filter(created_at__gte=year_start).count()
+        events_last_year = Event.objects.filter(
+            created_at__gte=last_year_start, created_at__lt=year_start
+        ).count()
+        jobs_this_year = JobPosting.objects.filter(created_at__gte=year_start).count()
+        jobs_last_year = JobPosting.objects.filter(
+            created_at__gte=last_year_start, created_at__lt=year_start
+        ).count()
+
+        kpis = {
+            "alumni_total": alumni_qs.count(),
+            "alumni_growth_pct": pct(alumni_this_year, alumni_last_year),
+            "alumni_active": alumni_qs.filter(status="active").count(),
+            "events_total": Event.objects.count(),
+            "events_growth_pct": pct(events_this_year, events_last_year),
+            "jobs_total": JobPosting.objects.count(),
+            "jobs_growth_pct": pct(jobs_this_year, jobs_last_year),
+            "companies_total": Company.objects.count(),
+            "super_alumni": alumni_qs.filter(is_super_alumni=True).count(),
+        }
+
+        # ── Alumni growth over time (cumulative) ──
+        monthly_new = (
+            alumni_qs.filter(created_at__gte=year_start)
+            .annotate(month=TruncMonth("created_at"))
+            .values("month")
+            .annotate(count=Count("id"))
+        )
+        growth_map = {r["month"].month: r["count"] for r in monthly_new}
+        base = alumni_qs.filter(created_at__lt=year_start).count()
+        alumni_growth, running = [], base
+        for i in range(1, now.month + 1):
+            running += growth_map.get(i, 0)
+            alumni_growth.append({"month": months_short[i - 1], "alumni": running})
+
+        # ── by location (top cities) ──
+        loc_rows = (
+            alumni_qs.exclude(city="").values("city")
+            .annotate(count=Count("id")).order_by("-count")
+        )
+        loc_rows = list(loc_rows)
+        top_loc = loc_rows[:6]
+        other_loc = sum(r["count"] for r in loc_rows[6:])
+        by_location = [{"label": r["city"], "value": r["count"]} for r in top_loc]
+        if other_loc:
+            by_location.append({"label": "Others", "value": other_loc})
+
+        # ── by industry (domain) ──
+        ind_rows = list(
+            alumni_qs.values("domain").annotate(count=Count("id")).order_by("-count")
+        )
+        norm = {}
+        for r in ind_rows:
+            key = (r["domain"] or "Other").strip() or "Other"
+            norm[key] = norm.get(key, 0) + r["count"]
+        ind_sorted = sorted(norm.items(), key=lambda kv: -kv[1])
+        top_ind = ind_sorted[:5]
+        other_ind = sum(v for _, v in ind_sorted[5:])
+        by_industry = [{"label": k, "value": v} for k, v in top_ind]
+        if other_ind:
+            by_industry.append({"label": "Others", "value": other_ind})
+
+        # ── by branch (second donut) ──
+        by_branch = [
+            {"label": r["branch"], "value": r["count"]}
+            for r in alumni_qs.values("branch").annotate(count=Count("id")).order_by("-count")
+        ]
+
+        # ── engagement over time (events + jobs per month) ──
+        ev = {d["month"]: d["events"] for d in monthly_series(Event.objects, "events")}
+        jb = {d["month"]: d["jobs"] for d in monthly_series(JobPosting.objects, "jobs")}
+        engagement = [
+            {"month": months_short[i - 1],
+             "events": ev.get(months_short[i - 1], 0),
+             "jobs": jb.get(months_short[i - 1], 0)}
+            for i in range(1, now.month + 1)
+        ]
+
+        # ── top active alumni (by willingness to help) ──
+        top_alumni = [
+            {
+                "id": a.id, "name": a.name,
+                "role_level": a.role_level,
+                "company": a.company.name if a.company else "",
+                "willingness": a.willingness,
+                "is_super_alumni": a.is_super_alumni,
+            }
+            for a in alumni_qs.select_related("company").order_by(
+                "-is_super_alumni", "-willingness", "name"
+            )[:5]
+        ]
+
+        return Response({
+            "kpis": kpis,
+            "alumni_growth": alumni_growth,
+            "by_location": by_location,
+            "by_industry": by_industry,
+            "by_branch": by_branch,
+            "engagement": engagement,
+            "top_alumni": top_alumni,
+        })

@@ -63,6 +63,16 @@ class Alumni(TimeStamped):
     email = models.EmailField()
     phone = models.CharField(max_length=30, blank=True)
     linkedin = models.CharField(max_length=200, blank=True)
+    github = models.CharField(max_length=200, blank=True)
+    twitter = models.CharField(max_length=200, blank=True)
+    website = models.CharField(max_length=200, blank=True)
+    bio = models.TextField(blank=True)
+    skills = models.CharField(
+        max_length=400, blank=True, help_text="Comma-separated skills"
+    )
+    interests = models.CharField(
+        max_length=400, blank=True, help_text="Comma-separated interests"
+    )
     status = models.CharField(
         max_length=10, choices=Status.choices, default=Status.ACTIVE
     )

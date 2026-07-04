@@ -35,6 +35,7 @@ class AlumniSerializer(serializers.ModelSerializer):
         fields = [
             "id", "name", "batch", "branch", "company", "company_name",
             "role_level", "domain", "city", "email", "phone", "linkedin",
+            "github", "twitter", "website", "bio", "skills", "interests",
             "status", "is_super_alumni", "willingness", "consent_given",
             "updated_by", "updated_by_name", "created_at", "updated_at",
         ]
@@ -178,7 +179,7 @@ class JobPostingSerializer(serializers.ModelSerializer):
     class Meta:
         model = JobPosting
         fields = [
-            "id", "title", "company", "location", "work_mode",
+            "id", "title", "company", "location", "work_mode", "employment_type",
             "description", "apply_url", "posted_by", "posted_by_name",
             "is_open", "created_at",
         ]

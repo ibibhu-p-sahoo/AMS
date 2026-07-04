@@ -15,6 +15,7 @@ const NAV: { to: string; label: string; icon: string }[] = [
   { to: "/job-intel", label: "Job-Intel", icon: "📈" },
   { to: "/jobs", label: "Jobs", icon: "💼" },
   { to: "/tasks", label: "Tasks", icon: "✅" },
+  { to: "/reports", label: "Reports & Analytics", icon: "📊" },
   { to: "/users", label: "Users", icon: "👤" },
   { to: "/audit", label: "Audit Log", icon: "🛡️" },
 ];

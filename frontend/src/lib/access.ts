@@ -18,6 +18,7 @@ export const MODULE_ACCESS: Record<string, Role[]> = {
   "/job-intel": ALL,
   "/jobs": ALL,                                   // Job board — everyone
   "/tasks": STAFF,
+  "/reports": STAFF,
   "/users": ["admin"],
   "/audit": ["admin", "coordinator"],
 };

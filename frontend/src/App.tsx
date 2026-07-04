@@ -7,6 +7,7 @@ import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
 import Dashboard from "./pages/Dashboard";
 import Alumni from "./pages/Alumni";
+import AlumniProfile from "./pages/AlumniProfile";
 import Students from "./pages/Students";
 import Companies from "./pages/Companies";
 import Campaigns from "./pages/Campaigns";
@@ -16,6 +17,7 @@ import JobIntel from "./pages/JobIntel";
 import Tasks from "./pages/Tasks";
 import Jobs from "./pages/Jobs";
 import Users from "./pages/Users";
+import Reports from "./pages/Reports";
 import AuditLog from "./pages/AuditLog";
 import PublicPulse from "./pages/PublicPulse";
 import PublicRsvp from "./pages/PublicRsvp";
@@ -41,6 +43,7 @@ export default function App() {
       <Route path="/forms/rsvp" element={<PublicRsvp />} />
       <Route path="/" element={<Protected><Dashboard /></Protected>} />
       <Route path="/alumni" element={<Protected><Alumni /></Protected>} />
+      <Route path="/alumni/:id" element={<Protected><AlumniProfile /></Protected>} />
       <Route path="/students" element={<Protected><Students /></Protected>} />
       <Route path="/companies" element={<Protected><Companies /></Protected>} />
       <Route path="/campaigns" element={<Protected><Campaigns /></Protected>} />
@@ -50,6 +53,7 @@ export default function App() {
       <Route path="/tasks" element={<Protected><Tasks /></Protected>} />
       <Route path="/jobs" element={<Protected><Jobs /></Protected>} />
       <Route path="/users" element={<Protected><Users /></Protected>} />
+      <Route path="/reports" element={<Protected><Reports /></Protected>} />
       <Route path="/audit" element={<Protected><AuditLog /></Protected>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

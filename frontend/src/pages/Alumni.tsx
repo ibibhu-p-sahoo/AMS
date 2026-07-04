@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, fetchList } from "../lib/api";
 import { canWrite, useAuth } from "../lib/auth";
@@ -76,6 +77,7 @@ const EMPTY_FORM: Record<string, unknown> = {
 
 export default function Alumni() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const toast = useToast();
   const writable = canWrite(user);
@@ -349,7 +351,7 @@ export default function Alumni() {
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-2">
                         <button
-                          onClick={() => setProfileAlumnus(a)}
+                          onClick={() => navigate(`/alumni/${a.id}`)}
                           className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-brand-300 hover:text-brand-600"
                         >
                           View Profile

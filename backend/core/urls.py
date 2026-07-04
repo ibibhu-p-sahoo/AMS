@@ -4,6 +4,7 @@ from rest_framework.routers import DefaultRouter
 from .public import PublicEventsView, PublicJobIntelView, PublicRsvpView
 from .views import (
     AlumniViewSet,
+    AnalyticsView,
     AuditLogViewSet,
     CompanyViewSet,
     DashboardView,
@@ -38,6 +39,7 @@ router.register("audit-log", AuditLogViewSet)
 
 urlpatterns = [
     path("dashboard/", DashboardView.as_view(), name="dashboard"),
+    path("analytics/", AnalyticsView.as_view(), name="analytics"),
     # Public, no-login forms (PRD §8)
     path("public/events/", PublicEventsView.as_view(), name="public-events"),
     path("public/rsvp/", PublicRsvpView.as_view(), name="public-rsvp"),
