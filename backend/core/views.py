@@ -317,27 +317,33 @@ class EventViewSet(AuditedModelViewSet):
     filterset_fields = ["type"]
     ordering_fields = ["date", "title"]
 
-    def perform_create(self, serializer):
-        instance = serializer.save()
-        self._log("created", instance)
-        # Auto-announce upcoming events to alumni (PRD §3 Notifications).
+    def _announce_event(self, instance, verb="New event"):
         if instance.date and instance.date >= timezone.now():
             from .tasks import send_event_announcement
-
             try:
                 send_event_announcement.delay(instance.id)
             except Exception:
-                # Broker unavailable → run inline so event creation still succeeds.
                 send_event_announcement(instance.id)
-
-            # In-app broadcast to every user (PRD §3 Notifications).
             when = timezone.localtime(instance.date).strftime("%d %b %Y, %I:%M %p")
             notify_all_users(
-                title=f"New event: {instance.title}",
+                title=f"{verb}: {instance.title}",
                 message=f"{when} · {instance.venue or 'TBA'}",
                 link="/events",
                 kind=Notification.Kind.EVENT,
             )
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        self._log("created", instance)
+        self._announce_event(instance, verb="New event")
+
+    def perform_update(self, serializer):
+        old_date = serializer.instance.date
+        instance = serializer.save()
+        self._log("updated", instance)
+        # Notify if date changed to a future time
+        if instance.date != old_date:
+            self._announce_event(instance, verb="Event updated")
 
 
 class EventParticipantViewSet(AuditedModelViewSet):
@@ -486,6 +492,7 @@ class DashboardView(APIView):
         from datetime import timedelta
 
         from django.contrib.auth import get_user_model
+        from django.db.models.functions import TruncMonth
 
         from .models import JobPosting
 
@@ -497,10 +504,43 @@ class DashboardView(APIView):
             | Q(last_followup_at__isnull=True, created_at__lt=sla_cutoff)
         ).count()
 
-        # Tasks assigned to the requesting user (for personal/volunteer views).
         my_tasks_open = Task.objects.filter(
             assignee=request.user
         ).exclude(status="done").count() if request.user.is_authenticated else 0
+
+        # Alumni growth: cumulative month-by-month for current year
+        now = timezone.now()
+        year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        monthly_new = (
+            Alumni.objects
+            .filter(created_at__gte=year_start)
+            .annotate(month=TruncMonth("created_at"))
+            .values("month")
+            .annotate(count=Count("id"))
+            .order_by("month")
+        )
+        base_count = Alumni.objects.filter(created_at__lt=year_start).count()
+        months_short = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+        growth_map = {r["month"].month: r["count"] for r in monthly_new}
+        alumni_growth = []
+        running = base_count
+        for m in range(1, now.month + 1):
+            running += growth_map.get(m, 0)
+            alumni_growth.append({"month": months_short[m - 1], "alumni": running})
+
+        # Recent activities from audit log
+        recent_logs = AuditLog.objects.select_related("user").order_by("-timestamp")[:8]
+        recent_activities = [
+            {
+                "id": log.pk,
+                "action": log.action,
+                "entity": log.entity,
+                "summary": log.summary,
+                "user": log.user.name if log.user and hasattr(log.user, "name") else (log.user.email if log.user else "System"),
+                "timestamp": log.timestamp.isoformat(),
+            }
+            for log in recent_logs
+        ]
 
         data = {
             "jobs_open": JobPosting.objects.filter(is_open=True).count(),
@@ -528,5 +568,7 @@ class DashboardView(APIView):
             "alumni_by_branch": list(
                 Alumni.objects.values("branch").annotate(count=Count("id")).order_by("-count")
             ),
+            "alumni_growth": alumni_growth,
+            "recent_activities": recent_activities,
         }
         return Response(data)

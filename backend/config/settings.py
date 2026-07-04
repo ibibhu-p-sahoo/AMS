@@ -179,4 +179,8 @@ CELERY_BEAT_SCHEDULE = {
         "task": "core.tasks.send_job_intel_pulse",
         "schedule": 60 * 60 * 24,  # daily check; fires on the 1st of the month
     },
+    "purge-old-notifications": {
+        "task": "core.tasks.purge_old_notifications",
+        "schedule": 60 * 60 * 24,  # runs daily, deletes notifications older than 3 days
+    },
 }

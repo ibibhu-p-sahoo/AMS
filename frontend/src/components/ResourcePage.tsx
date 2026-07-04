@@ -1,4 +1,5 @@
 import { useState, ReactNode } from "react";
+import Pagination from "./Pagination";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, fetchList } from "../lib/api";
 import { canWrite, useAuth } from "../lib/auth";
@@ -64,12 +65,13 @@ export function ResourcePage<T extends { id: number }>({
   const writable = canWrite(user);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Partial<T> | null>(null);
   const [form, setForm] = useState<Record<string, unknown>>({});
   const [error, setError] = useState("");
 
-  const params = { search, page, ...filterParams };
+  const params = { search, page, page_size: pageSize, ...filterParams };
   const { data, isLoading, refetch } = useQuery({
     queryKey: [queryKey, params],
     queryFn: () => fetchList<T>(endpoint, params),
@@ -145,7 +147,6 @@ export function ResourcePage<T extends { id: number }>({
   }
 
   const total = data?.count ?? 0;
-  const pageSize = 25;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
@@ -221,13 +222,14 @@ export function ResourcePage<T extends { id: number }>({
         </div>
       </Card>
 
-      {totalPages > 1 && (
-        <div className="mt-4 flex items-center justify-center gap-3 text-sm">
-          <Button variant="outline" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>Prev</Button>
-          <span className="text-slate-500">Page {page} of {totalPages}</span>
-          <Button variant="outline" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>Next</Button>
-        </div>
-      )}
+      <Pagination
+        page={page}
+        totalPages={totalPages}
+        total={total}
+        pageSize={pageSize}
+        onPage={setPage}
+        onPageSize={(s) => { setPageSize(s); setPage(1); }}
+      />
 
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editing ? `Edit ${title}` : `New ${title}`}>
         <form onSubmit={submit} className="space-y-3">

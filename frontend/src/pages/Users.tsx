@@ -4,6 +4,7 @@ import { api, fetchList } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useToast } from "../lib/toast";
 import { Badge, Button, Card, Input, Label, Modal, PageHeader, Select } from "../components/ui";
+import Pagination from "../components/Pagination";
 
 interface ManagedUser {
   id: number;
@@ -28,6 +29,8 @@ export default function Users() {
   const toast = useToast();
 
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState({ name: "", email: "", role: "volunteer", password: "" });
   const [error, setError] = useState("");
@@ -35,9 +38,11 @@ export default function Users() {
   const [credential, setCredential] = useState<{ email: string; password: string } | null>(null);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["users", search],
-    queryFn: () => fetchList<ManagedUser>("/users/", { search }),
+    queryKey: ["users", search, page, pageSize],
+    queryFn: () => fetchList<ManagedUser>("/users/", { search, page, page_size: pageSize }),
   });
+  const total = data?.count ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const create = useMutation({
     mutationFn: async () => {
@@ -125,7 +130,7 @@ export default function Users() {
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-xs"
         />
-        <span className="ml-auto text-sm text-slate-400">{data?.count ?? 0} users</span>
+        <span className="ml-auto text-sm text-slate-400">{total} users</span>
       </Card>
 
       <Card className="overflow-hidden">
@@ -178,6 +183,15 @@ export default function Users() {
           </table>
         </div>
       </Card>
+
+      <Pagination
+        page={page}
+        totalPages={totalPages}
+        total={total}
+        pageSize={pageSize}
+        onPage={setPage}
+        onPageSize={(s) => { setPageSize(s); setPage(1); }}
+      />
 
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="New user">
         <form onSubmit={(e) => { e.preventDefault(); setError(""); create.mutate(); }} className="space-y-3">

@@ -4,6 +4,7 @@ import { api, fetchList } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useToast } from "../lib/toast";
 import { Badge, Button, Card, Input, Label, Modal, PageHeader, Select, Textarea } from "../components/ui";
+import Pagination from "../components/Pagination";
 
 interface Job {
   id: number;
@@ -33,6 +34,8 @@ export default function Jobs() {
   const toast = useToast();
 
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState({ ...EMPTY });
   const [error, setError] = useState("");
@@ -43,9 +46,11 @@ export default function Jobs() {
     !!user && (user.is_admin || user.role === "coordinator" || j.posted_by === user.id);
 
   const { data, isLoading } = useQuery({
-    queryKey: ["jobs", search],
-    queryFn: () => fetchList<Job>("/jobs/", { search }),
+    queryKey: ["jobs", search, page, pageSize],
+    queryFn: () => fetchList<Job>("/jobs/", { search, page, page_size: pageSize }),
   });
+  const total = data?.count ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const create = useMutation({
     mutationFn: async () => (await api.post("/jobs/", form)).data,
@@ -89,7 +94,7 @@ export default function Jobs() {
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-xs"
         />
-        <span className="ml-auto text-sm text-slate-400">{data?.count ?? 0} openings</span>
+        <span className="ml-auto text-sm text-slate-400">{total} openings</span>
       </Card>
 
       {isLoading ? (
@@ -144,6 +149,15 @@ export default function Jobs() {
           ))}
         </div>
       )}
+
+      <Pagination
+        page={page}
+        totalPages={totalPages}
+        total={total}
+        pageSize={pageSize}
+        onPage={setPage}
+        onPageSize={(s) => { setPageSize(s); setPage(1); }}
+      />
 
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="Post a job">
         <form onSubmit={(e) => { e.preventDefault(); setError(""); create.mutate(); }} className="space-y-3">

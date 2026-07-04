@@ -90,6 +90,16 @@ def send_event_announcement(event_id):
 
 
 @shared_task
+def purge_old_notifications():
+    """Delete notifications older than 3 days (read or unread)."""
+    from .models import Notification
+
+    cutoff = timezone.now() - timedelta(days=3)
+    deleted, _ = Notification.objects.filter(created_at__lt=cutoff).delete()
+    return deleted
+
+
+@shared_task
 def send_job_intel_pulse():
     """Monthly hiring-pulse trigger (fires on the 1st of the month).
 
