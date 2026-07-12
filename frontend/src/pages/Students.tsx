@@ -55,7 +55,7 @@ export default function Students() {
       fields={[
         { name: "name", label: "Name", required: true },
         { name: "batch", label: "Batch (year)", type: "number", required: true },
-        { name: "branch", label: "Branch", type: "select", required: true, options: BRANCHES.map((b) => ({ value: b, label: b })) },
+        { name: "branch", label: "Branch", type: "addable", required: true, reassignTo: "Other", options: BRANCHES.map((b) => ({ value: b, label: b })) },
         { name: "gpa", label: "GPA", type: "number" },
         { name: "domain", label: "Domain" },
         { name: "email", label: "Email", type: "email" },

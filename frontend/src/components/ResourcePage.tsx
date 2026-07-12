@@ -4,7 +4,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, fetchList } from "../lib/api";
 import { canWrite, useAuth } from "../lib/auth";
 import { useToast } from "../lib/toast";
+import { isValidEmail } from "../lib/validation";
 import {
+  AddableSelect,
   Badge,
   Button,
   Card,
@@ -19,11 +21,15 @@ import {
 export interface FieldDef {
   name: string;
   label: string;
-  type?: "text" | "number" | "email" | "textarea" | "select" | "checkbox" | "date" | "datetime-local";
+  // "addable" = dropdown with an "➕ Add new…" option + delete (free-text value lists only).
+  type?: "text" | "number" | "email" | "textarea" | "select" | "addable" | "checkbox" | "date" | "datetime-local";
   options?: { value: string | number; label: string }[];
   required?: boolean;
   // hide from the create/edit form (e.g. server-computed)
   hidden?: boolean;
+  // For "addable": value that records get reassigned to when a custom value is
+  // deleted (defaults to the first base option).
+  reassignTo?: string;
 }
 
 export interface ColumnDef<T> {
@@ -63,6 +69,7 @@ export function ResourcePage<T extends { id: number }>({
   const qc = useQueryClient();
   const toast = useToast();
   const writable = canWrite(user);
+  const isAdmin = !!user?.is_admin;
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -90,7 +97,15 @@ export function ResourcePage<T extends { id: number }>({
       qc.invalidateQueries({ queryKey: [queryKey] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
-    onError: (e: any) => setError(JSON.stringify(e?.response?.data || "Error")),
+    onError: (e: any) => {
+      const data = e?.response?.data;
+      if (data && typeof data === "object") {
+        const first = Object.values(data)[0];
+        setError(Array.isArray(first) ? String(first[0]) : String(first));
+      } else {
+        setError("Could not save. Please try again.");
+      }
+    },
   });
 
   const remove = useMutation({
@@ -101,6 +116,17 @@ export function ResourcePage<T extends { id: number }>({
       qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
     onError: () => toast.error("Could not delete record"),
+  });
+
+  // Remove a custom value from an "addable" field (reassigns records off it).
+  const deleteValue = useMutation({
+    mutationFn: (v: { field: string; value: string; reassign_to: string }) =>
+      api.post(`${endpoint}delete-value/`, v),
+    onSuccess: () => {
+      toast.success("Removed");
+      qc.invalidateQueries({ queryKey: [queryKey] });
+    },
+    onError: () => toast.error("Could not remove"),
   });
 
   function openCreate() {
@@ -124,6 +150,14 @@ export function ResourcePage<T extends { id: number }>({
   function submit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+    // Block on any email field with a non-empty, malformed value.
+    const badEmail = fields.find(
+      (f) => f.type === "email" && String(form[f.name] ?? "").trim() !== "" && !isValidEmail(String(form[f.name])),
+    );
+    if (badEmail) {
+      setError("Please enter a valid email address (e.g. name@example.com).");
+      return;
+    }
     const payload: Record<string, unknown> = {};
     fields.forEach((f) => {
       const v = form[f.name];
@@ -136,7 +170,7 @@ export function ResourcePage<T extends { id: number }>({
         // Only send empty value for free-text fields (so they can be cleared).
         // For optional selects / FKs / numbers / dates, omit it entirely so the
         // backend default or null applies — "" is not a valid choice/pk/date.
-        if (["text", "email", "textarea", undefined].includes(f.type)) {
+        if (["text", "email", "textarea", "addable", undefined].includes(f.type)) {
           payload[f.name] = "";
         }
         return;
@@ -243,11 +277,46 @@ export function ResourcePage<T extends { id: number }>({
                   <option value="">— select —</option>
                   {f.options?.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </Select>
-              ) : f.type === "checkbox" ? (
+              ) : f.type === "addable" ? (() => {
+                const base = (f.options ?? []).map((o) => String(o.value));
+                const seen = (data?.results ?? [])
+                  .map((r) => String((r as any)[f.name] ?? ""))
+                  .filter(Boolean);
+                const current = String(form[f.name] ?? "");
+                // Data-driven: on a fresh dataset seed from base, but once records
+                // exist the list follows real usage so ANY value can be deleted and
+                // actually disappear (base stays only as the reassign fallback).
+                const shown = seen.length ? seen : base;
+                const opts = Array.from(new Set([...shown, ...(current ? [current] : [])]));
+                const reassignTo = f.reassignTo ?? base[0] ?? "";
+                return (
+                  <AddableSelect
+                    value={current}
+                    options={opts}
+                    onChange={(v) => setForm({ ...form, [f.name]: v })}
+                    required={f.required}
+                    addLabel={`➕ Add new ${f.label.toLowerCase()}…`}
+                    placeholder={`Type new ${f.label.toLowerCase()}`}
+                    onDelete={isAdmin ? (v) => deleteValue.mutate({ field: f.name, value: v, reassign_to: v === reassignTo ? "" : reassignTo }) : undefined}
+                  />
+                );
+              })() : f.type === "checkbox" ? (
                 <label className="flex items-center gap-2 text-sm text-slate-700">
                   <input type="checkbox" checked={!!form[f.name]} onChange={(e) => setForm({ ...form, [f.name]: e.target.checked })} />
                   {f.label}
                 </label>
+              ) : f.type === "email" ? (
+                <>
+                  <Input
+                    type="email"
+                    value={String(form[f.name] ?? "")}
+                    onChange={(e) => setForm({ ...form, [f.name]: e.target.value })}
+                    required={f.required}
+                  />
+                  {String(form[f.name] ?? "").trim() !== "" && !isValidEmail(String(form[f.name])) && (
+                    <p className="mt-1 text-xs text-red-600">Please enter a valid email address (e.g. name@example.com).</p>
+                  )}
+                </>
               ) : (
                 <Input
                   type={f.type || "text"}

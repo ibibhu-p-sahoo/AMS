@@ -74,9 +74,9 @@ export default function Campaigns() {
       )}
       fields={[
         { name: "name", label: "Name", required: true },
-        { name: "channel", label: "Channel", type: "select", required: true, options: CHANNELS },
+        { name: "channel", label: "Channel", type: "addable", required: true, options: CHANNELS },
         { name: "template", label: "Template", type: "select", options: templateOptions },
-        { name: "seg_branch", label: "Segment — branch", type: "select", options: BRANCHES.map((b) => ({ value: b, label: b })) },
+        { name: "seg_branch", label: "Segment — branch", type: "addable", options: BRANCHES.map((b) => ({ value: b, label: b })) },
         { name: "seg_city", label: "Segment — city", type: "text" },
         { name: "seg_domain", label: "Segment — domain", type: "text" },
       ]}

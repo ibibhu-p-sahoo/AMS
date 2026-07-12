@@ -21,6 +21,7 @@ import Reports from "./pages/Reports";
 import AuditLog from "./pages/AuditLog";
 import PublicPulse from "./pages/PublicPulse";
 import PublicRsvp from "./pages/PublicRsvp";
+import PublicAlumniForm from "./pages/PublicAlumniForm";
 import { ReactNode } from "react";
 
 function Protected({ children }: { children: ReactNode }) {
@@ -41,6 +42,7 @@ export default function App() {
       {/* Public, no-login forms (PRD §8) */}
       <Route path="/forms/pulse" element={<PublicPulse />} />
       <Route path="/forms/rsvp" element={<PublicRsvp />} />
+      <Route path="/forms/alumni" element={<PublicAlumniForm />} />
       <Route path="/" element={<Protected><Dashboard /></Protected>} />
       <Route path="/alumni" element={<Protected><Alumni /></Protected>} />
       <Route path="/alumni/:id" element={<Protected><AlumniProfile /></Protected>} />

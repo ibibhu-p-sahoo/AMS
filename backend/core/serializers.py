@@ -1,7 +1,9 @@
 from rest_framework import serializers
 
+from .email_utils import DeliverableEmailField
 from .models import (
     Alumni,
+    AlumniSubmission,
     AuditLog,
     Company,
     Event,
@@ -28,21 +30,68 @@ class CompanySerializer(serializers.ModelSerializer):
 
 class AlumniSerializer(serializers.ModelSerializer):
     company_name = serializers.CharField(source="company.name", read_only=True)
+    # Write company by name — creates the Company if it doesn't exist yet, so the
+    # employer directory stays driven by alumni (matches CompanyViewSet filter).
+    company_input = serializers.CharField(
+        write_only=True, required=False, allow_blank=True
+    )
     updated_by_name = serializers.CharField(source="updated_by.name", read_only=True)
+    # Free-text so the UI can add brand-new branches (MBA, MCA, …) on the fly,
+    # instead of being limited to the fixed Branch choices.
+    branch = serializers.CharField(max_length=20)
+    # Format + real-domain (MX) check.
+    email = DeliverableEmailField()
+    # Free-text so the UI can add/delete custom values on the fly.
+    status = serializers.CharField(required=False, allow_blank=True)
+    role_level = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = Alumni
         fields = [
-            "id", "name", "batch", "branch", "company", "company_name",
+            "id", "name", "batch", "dob", "photo", "branch", "company", "company_name", "company_input",
             "role_level", "domain", "city", "email", "phone", "linkedin",
             "github", "twitter", "website", "bio", "skills", "interests",
             "status", "is_super_alumni", "willingness", "consent_given",
             "updated_by", "updated_by_name", "created_at", "updated_at",
         ]
-        read_only_fields = ["updated_by"]
+        read_only_fields = ["updated_by", "company"]
+
+    def _apply_company(self, validated_data):
+        # Only touch company when the caller sent the field.
+        if "company_input" in validated_data:
+            name = (validated_data.pop("company_input") or "").strip()
+            validated_data["company"] = (
+                Company.objects.get_or_create(name=name)[0] if name else None
+            )
+
+    def create(self, validated_data):
+        self._apply_company(validated_data)
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        self._apply_company(validated_data)
+        return super().update(instance, validated_data)
+
+
+class AlumniSubmissionSerializer(serializers.ModelSerializer):
+    reviewed_by_name = serializers.CharField(source="reviewed_by.name", read_only=True)
+
+    class Meta:
+        model = AlumniSubmission
+        fields = [
+            "id", "name", "email", "batch", "branch", "company", "role_level",
+            "domain", "city", "phone", "linkedin", "photo", "status",
+            "reviewed_by", "reviewed_by_name", "created_at",
+        ]
+        read_only_fields = fields
 
 
 class StudentSerializer(serializers.ModelSerializer):
+    # Free-text so the UI can add brand-new branches on the fly (see Alumni).
+    branch = serializers.CharField(max_length=20)
+    # Format + real-domain (MX) check. Optional (student email may be blank).
+    email = DeliverableEmailField(required=False, allow_blank=True)
+
     class Meta:
         model = Student
         fields = [
@@ -69,6 +118,7 @@ class OutreachContactSerializer(serializers.ModelSerializer):
 
 
 class OutreachCampaignSerializer(serializers.ModelSerializer):
+    channel = serializers.CharField(required=False, allow_blank=True)
     owner_name = serializers.CharField(source="owner.name", read_only=True)
     template_name = serializers.CharField(source="template.name", read_only=True)
     contact_count = serializers.IntegerField(source="contacts.count", read_only=True)
@@ -116,6 +166,7 @@ class EventParticipantSerializer(serializers.ModelSerializer):
 
 
 class EventSerializer(serializers.ModelSerializer):
+    type = serializers.CharField(required=False, allow_blank=True)
     participant_count = serializers.IntegerField(
         source="participants.count", read_only=True
     )
@@ -129,6 +180,8 @@ class EventSerializer(serializers.ModelSerializer):
 
 
 class ReferralLeadSerializer(serializers.ModelSerializer):
+    stage = serializers.CharField(required=False, allow_blank=True)
+    outcome = serializers.CharField(required=False, allow_blank=True)
     student_name = serializers.CharField(source="student.name", read_only=True)
     company_name = serializers.CharField(source="company.name", read_only=True)
     alumni_name = serializers.CharField(source="alumni.name", read_only=True)
@@ -152,6 +205,7 @@ class ReferralLeadSerializer(serializers.ModelSerializer):
 
 
 class JobIntelResponseSerializer(serializers.ModelSerializer):
+    timeline = serializers.CharField(required=False, allow_blank=True)
     alumni_name = serializers.CharField(source="alumni.name", read_only=True)
 
     class Meta:
@@ -163,6 +217,8 @@ class JobIntelResponseSerializer(serializers.ModelSerializer):
 
 
 class TaskSerializer(serializers.ModelSerializer):
+    team = serializers.CharField()
+    status = serializers.CharField(required=False, allow_blank=True)
     assignee_name = serializers.CharField(source="assignee.name", read_only=True)
 
     class Meta:
@@ -174,6 +230,8 @@ class TaskSerializer(serializers.ModelSerializer):
 
 
 class JobPostingSerializer(serializers.ModelSerializer):
+    work_mode = serializers.CharField(required=False, allow_blank=True)
+    employment_type = serializers.CharField(required=False, allow_blank=True)
     posted_by_name = serializers.CharField(source="posted_by.name", read_only=True)
 
     class Meta:

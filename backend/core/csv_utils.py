@@ -30,6 +30,30 @@ class CsvMixin:
             writer.writerow(self.row_to_dict(obj))
         return resp
 
+    @action(detail=False, methods=["get"], url_path="export-xlsx")
+    def export_xlsx(self, request):
+        """Excel (.xlsx) export of the current filtered result set (respects
+        the same query params as the list — batch, branch, company, search)."""
+        from openpyxl import Workbook
+
+        qs = self.filter_queryset(self.get_queryset())
+        wb = Workbook()
+        ws = wb.active
+        ws.title = (self.csv_filename or "export")[:31]
+        ws.append([c.replace("_", " ").title() for c in self.csv_columns])
+        for obj in qs:
+            row = self.row_to_dict(obj)
+            ws.append([row.get(c, "") for c in self.csv_columns])
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        resp = HttpResponse(
+            buf.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        resp["Content-Disposition"] = f'attachment; filename="{self.csv_filename}.xlsx"'
+        return resp
+
     @action(
         detail=False,
         methods=["post"],

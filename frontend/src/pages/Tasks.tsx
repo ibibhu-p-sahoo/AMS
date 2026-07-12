@@ -54,10 +54,10 @@ export default function Tasks() {
       }
       fields={[
         { name: "title", label: "Title", required: true },
-        { name: "team", label: "Team", type: "select", required: true, options: TEAMS },
+        { name: "team", label: "Team", type: "addable", required: true, options: TEAMS },
         { name: "assignee", label: "Assignee", type: "select", options: assignees },
         { name: "due_date", label: "Due date", type: "date" },
-        { name: "status", label: "Status", type: "select", options: STATUSES },
+        { name: "status", label: "Status", type: "addable", options: STATUSES },
       ]}
     />
   );

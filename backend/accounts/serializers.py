@@ -5,6 +5,8 @@ from django.contrib.auth import get_user_model
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
+from core.email_utils import DeliverableEmailField
+
 User = get_user_model()
 
 # Unambiguous alphabet (no O/0, I/l/1) so generated passwords are easy to read & share.
@@ -17,6 +19,8 @@ def generate_password(length: int = 12) -> str:
 
 
 class UserSerializer(serializers.ModelSerializer):
+    email = DeliverableEmailField()
+
     class Meta:
         model = User
         fields = ["id", "name", "email", "role", "is_active", "is_admin"]
@@ -24,6 +28,7 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class UserCreateSerializer(serializers.ModelSerializer):
+    email = DeliverableEmailField()
     # Optional — leave blank and the server auto-generates a strong password.
     password = serializers.CharField(
         write_only=True, min_length=8, required=False, allow_blank=True

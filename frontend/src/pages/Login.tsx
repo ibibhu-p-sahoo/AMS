@@ -244,34 +244,7 @@ export default function Login() {
               </Button>
             </form>
 
-            <div className="my-6 flex items-center gap-3 text-xs font-medium uppercase tracking-wide text-slate-400">
-              <span className="h-px flex-1 bg-slate-200" />
-              or
-              <span className="h-px flex-1 bg-slate-200" />
-            </div>
-
-            <div className="flex gap-3 text-sm">
-              <a
-                href="/forms/pulse"
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 font-medium text-slate-700 transition hover:border-brand-300 hover:bg-brand-50"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4 text-brand-600">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6m4-2h6v6m0-6L11 14" />
-                </svg>
-                Hiring Pulse form
-              </a>
-              <a
-                href="/forms/rsvp"
-                className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 font-medium text-slate-700 transition hover:border-brand-300 hover:bg-brand-50"
-              >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4 text-brand-600">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M7 3v3m10-3v3M4 9h16M5 6h14a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1Z" />
-                </svg>
-                Event RSVP form
-              </a>
-            </div>
-
-            <p className="mt-5 text-center text-xs text-slate-400">
+            <p className="mt-6 text-center text-xs text-slate-400">
               Google SSO (institute email) is the production sign-in.
             </p>
           </div>

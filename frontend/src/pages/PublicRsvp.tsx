@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { Button, Card, Input, Label, Select } from "../components/ui";
+import { isValidEmail } from "../lib/validation";
 
 interface PublicEvent {
   id: number;
@@ -23,6 +24,10 @@ export default function PublicRsvp() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+    if (form.email.trim() !== "" && !isValidEmail(form.email)) {
+      setError("Please enter a valid email address (e.g. name@example.com).");
+      return;
+    }
     setBusy(true);
     try {
       const res = await api.post("/public/rsvp/", { ...form, event: Number(form.event) });
@@ -62,6 +67,9 @@ export default function PublicRsvp() {
             <div>
               <Label>Email</Label>
               <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+              {form.email.trim() !== "" && !isValidEmail(form.email) && (
+                <p className="mt-1 text-xs text-red-600">Please enter a valid email address (e.g. name@example.com).</p>
+              )}
             </div>
             <div>
               <Label>You are a…</Label>

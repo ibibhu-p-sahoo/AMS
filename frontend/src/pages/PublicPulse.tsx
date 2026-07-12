@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../lib/api";
 import { Button, Card, Input, Label, Select, Textarea } from "../components/ui";
+import { isValidEmail } from "../lib/validation";
 
 const TIMELINES = [
   { value: "now", label: "Hiring now" },
@@ -18,6 +19,10 @@ export default function PublicPulse() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
+    if (!isValidEmail(form.email)) {
+      setError("Please enter a valid email address (e.g. name@example.com).");
+      return;
+    }
     setBusy(true);
     try {
       const res = await api.post("/public/job-intel/", form);
@@ -43,6 +48,9 @@ export default function PublicPulse() {
             <div>
               <Label>Your alumni email *</Label>
               <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
+              {form.email.trim() !== "" && !isValidEmail(form.email) && (
+                <p className="mt-1 text-xs text-red-600">Please enter a valid email address (e.g. name@example.com).</p>
+              )}
             </div>
             <label className="flex items-center gap-2 text-sm text-slate-700">
               <input type="checkbox" checked={form.hiring} onChange={(e) => setForm({ ...form, hiring: e.target.checked })} />

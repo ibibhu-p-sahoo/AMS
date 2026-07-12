@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, fetchList } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useToast } from "../lib/toast";
-import { Button, Modal, Input, Label, Select, Textarea } from "../components/ui";
+import { Button, Modal, Input, Label, Select, Textarea, AddableSelect } from "../components/ui";
 import Pagination from "../components/Pagination";
 
 interface Job {
@@ -131,6 +131,7 @@ export default function Jobs() {
   const [showFilters, setShowFilters] = useState(false);
 
   const canPost = !!user && user.role !== "readonly";
+  const isAdmin = !!user?.is_admin;
   const canManage = (j: Job) =>
     !!user && (user.is_admin || user.role === "coordinator" || j.posted_by === user.id);
 
@@ -175,6 +176,20 @@ export default function Jobs() {
     },
     onError: () => toast.error("Could not remove job"),
   });
+
+  // Remove a custom work-mode / employment-type value (reassigns jobs off it).
+  const deleteValue = useMutation({
+    mutationFn: (v: { field: string; value: string; reassign_to: string }) =>
+      api.post("/jobs/delete-value/", v),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["jobs"] }); toast.success("Removed"); },
+    onError: () => toast.error("Could not remove"),
+  });
+  const WORK_MODE_BASE = WORK_MODES.map((w) => w.value);
+  const EMP_BASE = EMPLOYMENT_TYPES.map((e) => e.value);
+  const jobValues = (field: string, base: string[]) => {
+    const seen = Array.from(new Set((data?.results ?? []).map((j) => String((j as any)[field] ?? "")).filter(Boolean)));
+    return seen.length ? seen : base;
+  };
 
   function applyHref(s: string) {
     if (!s) return null;
@@ -409,16 +424,26 @@ export default function Jobs() {
             </div>
             <div>
               <Label>Employment type</Label>
-              <Select value={form.employment_type} onChange={(e) => setForm({ ...form, employment_type: e.target.value })}>
-                {EMPLOYMENT_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-              </Select>
+              <AddableSelect
+                value={form.employment_type}
+                options={jobValues("employment_type", EMP_BASE)}
+                onChange={(v) => setForm({ ...form, employment_type: v })}
+                addLabel="➕ Add new type…"
+                placeholder="Type new employment type"
+                onDelete={isAdmin ? (v) => deleteValue.mutate({ field: "employment_type", value: v, reassign_to: v === "fulltime" ? "" : "fulltime" }) : undefined}
+              />
             </div>
           </div>
           <div>
             <Label>Work mode</Label>
-            <Select value={form.work_mode} onChange={(e) => setForm({ ...form, work_mode: e.target.value })}>
-              {WORK_MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
-            </Select>
+            <AddableSelect
+              value={form.work_mode}
+              options={jobValues("work_mode", WORK_MODE_BASE)}
+              onChange={(v) => setForm({ ...form, work_mode: v })}
+              addLabel="➕ Add new mode…"
+              placeholder="Type new work mode"
+              onDelete={isAdmin ? (v) => deleteValue.mutate({ field: "work_mode", value: v, reassign_to: v === "onsite" ? "" : "onsite" }) : undefined}
+            />
           </div>
           <div>
             <Label>Description *</Label>

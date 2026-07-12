@@ -41,7 +41,7 @@ export default function JobIntel() {
         { name: "alumni", label: "Alumnus", type: "select", required: true, options: alumni },
         { name: "hiring", label: "Currently hiring", type: "checkbox" },
         { name: "roles", label: "Open roles", type: "textarea" },
-        { name: "timeline", label: "Timeline", type: "select", options: TIMELINES },
+        { name: "timeline", label: "Timeline", type: "addable", options: TIMELINES },
       ]}
     />
   );

@@ -1,8 +1,9 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from .public import PublicEventsView, PublicJobIntelView, PublicRsvpView
+from .public import PublicAlumniView, PublicEventsView, PublicJobIntelView, PublicRsvpView
 from .views import (
+    AlumniSubmissionViewSet,
     AlumniViewSet,
     AnalyticsView,
     AuditLogViewSet,
@@ -23,6 +24,7 @@ from .views import (
 
 router = DefaultRouter()
 router.register("alumni", AlumniViewSet)
+router.register("alumni-submissions", AlumniSubmissionViewSet)
 router.register("students", StudentViewSet)
 router.register("companies", CompanyViewSet)
 router.register("templates", MessageTemplateViewSet)
@@ -44,5 +46,6 @@ urlpatterns = [
     path("public/events/", PublicEventsView.as_view(), name="public-events"),
     path("public/rsvp/", PublicRsvpView.as_view(), name="public-rsvp"),
     path("public/job-intel/", PublicJobIntelView.as_view(), name="public-job-intel"),
+    path("public/alumni/", PublicAlumniView.as_view(), name="public-alumni"),
     path("", include(router.urls)),
 ]

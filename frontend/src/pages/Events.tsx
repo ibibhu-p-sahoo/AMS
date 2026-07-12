@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, fetchList } from "../lib/api";
 import { canWrite, useAuth } from "../lib/auth";
 import { useToast } from "../lib/toast";
-import { Button, Modal, Label, Input, Select, PageHeader } from "../components/ui";
+import { Button, Modal, Label, Input, Select, PageHeader, AddableSelect } from "../components/ui";
 import Pagination from "../components/Pagination";
 
 interface Event {
@@ -81,6 +81,7 @@ export default function Events() {
   const qc = useQueryClient();
   const toast = useToast();
   const writable = canWrite(user);
+  const isAdmin = !!user?.is_admin;
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [search, setSearch] = useState("");
@@ -132,6 +133,17 @@ export default function Events() {
       qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
   });
+
+  // Remove a custom event type (reassigns events off it to "other").
+  const deleteValue = useMutation({
+    mutationFn: (v: { field: string; value: string; reassign_to: string }) =>
+      api.post("/events/delete-value/", v),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["events"] }); toast.success("Removed"); },
+    onError: () => toast.error("Could not remove"),
+  });
+  const TYPE_BASE = TYPES.map((t) => t.value);
+  const typeSeen = Array.from(new Set((data?.results ?? []).map((e) => String(e.type ?? "")).filter(Boolean)));
+  const typeValues = typeSeen.length ? typeSeen : TYPE_BASE;
 
   function openCreate() {
     setEditing(null);
@@ -350,9 +362,15 @@ export default function Events() {
           <div><Label>Title *</Label><Input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required /></div>
           <div>
             <Label>Type *</Label>
-            <Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })} required>
-              {TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-            </Select>
+            <AddableSelect
+              value={form.type}
+              options={typeValues}
+              onChange={(v) => setForm({ ...form, type: v })}
+              required
+              addLabel="➕ Add new type…"
+              placeholder="Type new event type"
+              onDelete={isAdmin ? (v) => deleteValue.mutate({ field: "type", value: v, reassign_to: v === "other" ? "" : "other" }) : undefined}
+            />
           </div>
           <div><Label>Date & Time *</Label><Input type="datetime-local" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required /></div>
           <div><Label>Venue</Label><Input value={form.venue} onChange={(e) => setForm({ ...form, venue: e.target.value })} /></div>

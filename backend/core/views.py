@@ -15,6 +15,7 @@ from .filters import AlumniFilter, ReferralLeadFilter
 from .pdf import render_student_brochure
 from .models import (
     Alumni,
+    AlumniSubmission,
     AuditLog,
     Company,
     Event,
@@ -32,6 +33,7 @@ from .models import (
 from .notifications import notify_all_users, notify_users
 from .serializers import (
     AlumniSerializer,
+    AlumniSubmissionSerializer,
     AuditLogSerializer,
     CompanySerializer,
     EventParticipantSerializer,
@@ -53,6 +55,26 @@ class AuditedModelViewSet(viewsets.ModelViewSet):
 
     permission_classes = [RolePermission]
     audit_entity = None  # override
+    # Char fields whose values the UI may add/delete on the fly (free-text lists).
+    editable_choice_fields = []
+
+    @action(detail=False, methods=["post"], url_path="delete-value")
+    def delete_value(self, request):
+        """Remove a custom value from a free-text choice field by reassigning
+        every record that uses it to `reassign_to` (a safe default value).
+        Admin-only."""
+        if not getattr(request.user, "is_admin", False):
+            return Response({"detail": "Only admins can delete values."}, status=403)
+        field = request.data.get("field")
+        if field not in self.editable_choice_fields:
+            return Response({"detail": "field not editable"}, status=400)
+        value = (request.data.get("value") or "").strip()
+        reassign_to = request.data.get("reassign_to") or ""
+        if not value:
+            return Response({"detail": "value is required"}, status=400)
+        model = self.queryset.model
+        n = model.objects.filter(**{field: value}).update(**{field: reassign_to})
+        return Response({"reassigned": n})
 
     def _log(self, action_name, instance):
         AuditLog.objects.create(
@@ -84,11 +106,30 @@ class CompanyViewSet(AuditedModelViewSet):
     filterset_fields = ["is_in_placement_list", "sector"]
     ordering_fields = ["name", "created_at"]
 
+    def get_queryset(self):
+        # The directory listing is driven by alumni employers: only surface
+        # companies that have at least one linked alumnus (PRD §7 companies).
+        # Other actions (retrieve/update/destroy) operate on all companies so a
+        # company can still be deleted even after its last alumnus leaves it.
+        qs = Company.objects.annotate(num_alumni=Count("alumni"))
+        if self.action == "list":
+            return qs.filter(num_alumni__gt=0)
+        return qs
+
+    @action(detail=False, methods=["get"])
+    def names(self, request):
+        """All companies (unfiltered) as {id, name} for autocomplete suggestions
+        and delete-from-dropdown when assigning a company to an alumnus."""
+        return Response(
+            list(Company.objects.order_by("name").values("id", "name"))
+        )
+
 
 class AlumniViewSet(CsvMixin, AuditedModelViewSet):
     queryset = Alumni.objects.select_related("company", "updated_by").all()
     serializer_class = AlumniSerializer
     audit_entity = "Alumni"
+    editable_choice_fields = ["status", "role_level"]
     filterset_class = AlumniFilter
     search_fields = ["name", "email", "domain", "city", "company__name"]
     ordering_fields = ["name", "batch", "willingness", "updated_at"]
@@ -107,6 +148,41 @@ class AlumniViewSet(CsvMixin, AuditedModelViewSet):
     def perform_update(self, serializer):
         instance = serializer.save(updated_by=self.request.user)
         self._log("updated", instance)
+
+    @action(detail=False, methods=["get"])
+    def branches(self, request):
+        """Distinct branches currently in use, so the UI can offer them as
+        suggestions alongside newly added ones."""
+        values = (
+            Alumni.objects.exclude(branch="")
+            .values_list("branch", flat=True)
+            .distinct()
+        )
+        return Response(sorted(set(values)))
+
+    @action(detail=False, methods=["get"])
+    def batches(self, request):
+        """Distinct graduation years, newest first, for the filter dropdown."""
+        values = Alumni.objects.values_list("batch", flat=True).distinct()
+        return Response(sorted({v for v in values if v}, reverse=True))
+
+    @action(detail=False, methods=["post"])
+    def delete_branch(self, request):
+        """Remove a (custom) branch by reassigning everyone on it to 'Other'.
+        Applies to both alumni and students since they share the branch space.
+        Admin-only."""
+        if not getattr(request.user, "is_admin", False):
+            return Response({"detail": "Only admins can delete branches."}, status=403)
+        branch = (request.data.get("branch") or "").strip()
+        if not branch:
+            return Response({"detail": "branch is required"}, status=400)
+        if branch == "Other":
+            return Response({"detail": "'Other' cannot be deleted"}, status=400)
+        reassigned_alumni = Alumni.objects.filter(branch=branch).update(branch="Other")
+        reassigned_students = Student.objects.filter(branch=branch).update(branch="Other")
+        return Response(
+            {"reassigned_alumni": reassigned_alumni, "reassigned_students": reassigned_students}
+        )
 
     def row_to_dict(self, obj):
         return {
@@ -169,10 +245,80 @@ class AlumniViewSet(CsvMixin, AuditedModelViewSet):
         return Response({"by_branch": by_branch, "by_city": by_city})
 
 
+class AlumniSubmissionViewSet(
+    mixins.ListModelMixin, mixins.RetrieveModelMixin, viewsets.GenericViewSet
+):
+    """Review queue for self-service alumni submissions (public form).
+    Staff list pending items and approve (apply to directory) / reject them."""
+
+    queryset = AlumniSubmission.objects.select_related("reviewed_by").all()
+    serializer_class = AlumniSubmissionSerializer
+    permission_classes = [RolePermission]
+    write_roles = {Role.ADMIN, Role.COORDINATOR, Role.VOLUNTEER}
+    filterset_fields = ["status"]
+    ordering_fields = ["created_at", "status"]
+
+    def _apply_to_directory(self, sub, user):
+        cname = (sub.company or "").strip()
+        company = Company.objects.get_or_create(name=cname)[0] if cname else None
+        existing = Alumni.objects.filter(email__iexact=sub.email).first()
+        if existing:
+            existing.name = sub.name
+            existing.batch = sub.batch
+            existing.branch = sub.branch
+            existing.consent_given = True
+            if cname:
+                existing.company = company
+            for key in ("role_level", "domain", "city", "phone", "linkedin", "photo"):
+                if getattr(sub, key):
+                    setattr(existing, key, getattr(sub, key))
+            existing.updated_by = user
+            existing.save()
+            return existing, False
+        alum = Alumni.objects.create(
+            name=sub.name, email=sub.email, batch=sub.batch, branch=sub.branch,
+            company=company, role_level=sub.role_level, domain=sub.domain,
+            city=sub.city, phone=sub.phone, linkedin=sub.linkedin, photo=sub.photo,
+            status=Alumni.Status.ACTIVE, consent_given=True, updated_by=user,
+        )
+        return alum, True
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        sub = self.get_object()
+        if sub.status != AlumniSubmission.Status.PENDING:
+            return Response({"detail": "This submission was already reviewed."}, status=400)
+        alum, created = self._apply_to_directory(sub, request.user)
+        sub.status = AlumniSubmission.Status.APPROVED
+        sub.reviewed_by = request.user
+        sub.save(update_fields=["status", "reviewed_by", "updated_at"])
+        AuditLog.objects.create(
+            user=request.user, action="approved", entity="AlumniSubmission",
+            entity_id=str(sub.pk),
+            summary=f"{'Added' if created else 'Updated'} {sub.name} <{sub.email}>",
+        )
+        return Response({"detail": f"Approved — alumnus {'added' if created else 'updated'}.", "alumni_id": alum.id})
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        sub = self.get_object()
+        if sub.status != AlumniSubmission.Status.PENDING:
+            return Response({"detail": "This submission was already reviewed."}, status=400)
+        sub.status = AlumniSubmission.Status.REJECTED
+        sub.reviewed_by = request.user
+        sub.save(update_fields=["status", "reviewed_by", "updated_at"])
+        AuditLog.objects.create(
+            user=request.user, action="rejected", entity="AlumniSubmission",
+            entity_id=str(sub.pk), summary=f"Rejected {sub.name} <{sub.email}>",
+        )
+        return Response({"detail": "Submission rejected."})
+
+
 class StudentViewSet(CsvMixin, AuditedModelViewSet):
     queryset = Student.objects.all()
     serializer_class = StudentSerializer
     audit_entity = "Student"
+    editable_choice_fields = ["branch"]
     search_fields = ["name", "domain", "email"]
     filterset_fields = ["branch", "batch"]
     ordering_fields = ["name", "batch", "gpa"]
@@ -228,6 +374,7 @@ class OutreachCampaignViewSet(AuditedModelViewSet):
     queryset = OutreachCampaign.objects.select_related("owner", "template").all()
     serializer_class = OutreachCampaignSerializer
     audit_entity = "OutreachCampaign"
+    editable_choice_fields = ["channel"]
     search_fields = ["name"]
     filterset_fields = ["channel", "owner"]
 
@@ -313,6 +460,7 @@ class EventViewSet(AuditedModelViewSet):
     queryset = Event.objects.all()
     serializer_class = EventSerializer
     audit_entity = "Event"
+    editable_choice_fields = ["type"]
     search_fields = ["title", "venue"]
     filterset_fields = ["type"]
     ordering_fields = ["date", "title"]
@@ -359,6 +507,7 @@ class ReferralLeadViewSet(AuditedModelViewSet):
     queryset = ReferralLead.objects.select_related("alumni", "student", "company").all()
     serializer_class = ReferralLeadSerializer
     audit_entity = "ReferralLead"
+    editable_choice_fields = ["stage", "outcome"]
     filterset_class = ReferralLeadFilter
     ordering_fields = ["created_at", "last_followup_at", "stage"]
     write_roles = {Role.ADMIN, Role.COORDINATOR, Role.VOLUNTEER}
@@ -377,6 +526,7 @@ class JobIntelResponseViewSet(AuditedModelViewSet):
     queryset = JobIntelResponse.objects.select_related("alumni").all()
     serializer_class = JobIntelResponseSerializer
     audit_entity = "JobIntelResponse"
+    editable_choice_fields = ["timeline"]
     filterset_fields = ["hiring", "timeline", "alumni"]
     # Built-in form: alumni can submit their own pulse.
     write_roles = {Role.ADMIN, Role.COORDINATOR, Role.VOLUNTEER, Role.ALUMNUS}
@@ -386,6 +536,7 @@ class TaskViewSet(AuditedModelViewSet):
     queryset = Task.objects.select_related("assignee").all()
     serializer_class = TaskSerializer
     audit_entity = "Task"
+    editable_choice_fields = ["team", "status"]
     filterset_fields = ["team", "status", "assignee"]
     ordering_fields = ["due_date", "created_at"]
     write_roles = {Role.ADMIN, Role.COORDINATOR, Role.VOLUNTEER}
@@ -418,6 +569,7 @@ class JobPostingViewSet(AuditedModelViewSet):
     queryset = JobPosting.objects.select_related("posted_by").all()
     serializer_class = JobPostingSerializer
     audit_entity = "JobPosting"
+    editable_choice_fields = ["work_mode", "employment_type"]
     permission_classes = [OwnerOrStaffWritePermission]
     search_fields = ["title", "company", "location"]
     filterset_fields = ["work_mode", "employment_type", "is_open"]

@@ -5,6 +5,7 @@ import { useAuth } from "../lib/auth";
 import { useToast } from "../lib/toast";
 import { Badge, Button, Card, Input, Label, Modal, PageHeader, Select } from "../components/ui";
 import Pagination from "../components/Pagination";
+import { isValidEmail } from "../lib/validation";
 
 interface ManagedUser {
   id: number;
@@ -56,7 +57,15 @@ export default function Users() {
       setCredential({ email: u.email, password: u.generated_password });
       toast.success("User created");
     },
-    onError: (e: any) => setError(JSON.stringify(e?.response?.data || "Error")),
+    onError: (e: any) => {
+      const data = e?.response?.data;
+      if (data && typeof data === "object") {
+        const first = Object.values(data)[0];
+        setError(Array.isArray(first) ? String(first[0]) : String(first));
+      } else {
+        setError("Could not create user. Please try again.");
+      }
+    },
   });
 
   const resetPw = useMutation({
@@ -194,7 +203,18 @@ export default function Users() {
       />
 
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title="New user">
-        <form onSubmit={(e) => { e.preventDefault(); setError(""); create.mutate(); }} className="space-y-3">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setError("");
+            if (!isValidEmail(form.email)) {
+              setError("Please enter a valid email address (e.g. name@example.com).");
+              return;
+            }
+            create.mutate();
+          }}
+          className="space-y-3"
+        >
           <div>
             <Label>Name *</Label>
             <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
@@ -202,6 +222,9 @@ export default function Users() {
           <div>
             <Label>Email (this is the login) *</Label>
             <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
+            {form.email.trim() !== "" && !isValidEmail(form.email) && (
+              <p className="mt-1 text-xs text-red-600">Please enter a valid email address (e.g. name@example.com).</p>
+            )}
           </div>
           <div>
             <Label>Role *</Label>

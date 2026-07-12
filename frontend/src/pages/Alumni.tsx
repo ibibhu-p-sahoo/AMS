@@ -4,13 +4,17 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api, fetchList } from "../lib/api";
 import { canWrite, useAuth } from "../lib/auth";
 import { useToast } from "../lib/toast";
-import { Button, Modal, Label, Input, Select } from "../components/ui";
+import { Button, Modal, Label, Input, Select, AddableSelect } from "../components/ui";
+import { isValidEmail } from "../lib/validation";
+import { fileToAvatarDataUrl } from "../lib/image";
 import Pagination from "../components/Pagination";
 
 interface Alumnus {
   id: number;
   name: string;
   batch: number;
+  dob: string;
+  photo: string;
   branch: string;
   company_name: string;
   role_level: string;
@@ -24,7 +28,8 @@ interface Alumnus {
   willingness: number;
 }
 
-const BRANCHES = ["CSE", "IT", "ECE", "EEE", "Mech", "Civil", "Other"];
+const BRANCHES = ["CSE", "IT", "ECE", "EEE", "Mech", "Civil", "MBA", "Other"];
+
 const ROLE_LEVELS = [
   { value: "junior", label: "Junior" },
   { value: "mid",    label: "Mid" },
@@ -53,10 +58,13 @@ function linkedinUrl(v: string) {
   return v.startsWith("http") ? v : `https://${v}`;
 }
 
+
 const FIELDS = [
   { name: "name",           label: "Name",                    required: true },
   { name: "batch",          label: "Batch (year)",            type: "number", required: true },
+  { name: "dob",            label: "Date of birth",           type: "date" },
   { name: "branch",         label: "Branch",                  type: "select", options: BRANCHES.map((b) => ({ value: b, label: b })), required: true },
+  { name: "company_input",  label: "Company",                 type: "company" },
   { name: "domain",         label: "Domain" },
   { name: "city",           label: "City" },
   { name: "email",          label: "Email",                   type: "email", required: true },
@@ -65,12 +73,10 @@ const FIELDS = [
   { name: "status",         label: "Status",                  type: "select", options: [{ value: "active", label: "Active" }, { value: "passive", label: "Passive" }] },
   { name: "role_level",     label: "Role level",              type: "select", options: ROLE_LEVELS },
   { name: "willingness",    label: "Willingness (1–5)",       type: "number" },
-  { name: "is_super_alumni",label: "Super alumnus",           type: "checkbox" },
-  { name: "consent_given",  label: "DPDP consent given",      type: "checkbox" },
 ] as const;
 
 const EMPTY_FORM: Record<string, unknown> = {
-  name: "", batch: "", branch: "", domain: "", city: "",
+  name: "", batch: "", dob: "", photo: "", branch: "", company_input: "", domain: "", city: "",
   email: "", phone: "", linkedin: "", status: "active",
   role_level: "", willingness: "", is_super_alumni: false, consent_given: false,
 };
@@ -81,12 +87,16 @@ export default function Alumni() {
   const qc = useQueryClient();
   const toast = useToast();
   const writable = canWrite(user);
+  const isAdmin = !!user?.is_admin;
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const [search, setSearch]       = useState("");
-  const [branch, setBranch]       = useState("");
-  const [city, setCity]           = useState("");
-  const [sortBy, setSortBy]       = useState("-id");
+  // Draft = what's typed in the filter row; applied = what actually filters
+  // the list (committed on "Search"), matching the search-bar UX.
+  const [dName, setDName]       = useState("");
+  const [dBatch, setDBatch]     = useState("");
+  const [dBranch, setDBranch]   = useState("");
+  const [dCompany, setDCompany] = useState("");
+  const [applied, setApplied]   = useState({ name: "", batch: "", branch: "", company: "" });
   const [page, setPage]           = useState(1);
   const [pageSize, setPageSize]   = useState(25);
   const [modalOpen, setModalOpen] = useState(false);
@@ -96,9 +106,22 @@ export default function Alumni() {
   const [profileAlumnus, setProfileAlumnus] = useState<Alumnus | null>(null);
   const [menuOpenId, setMenuOpenId] = useState<number | null>(null);
   const [importBusy, setImportBusy] = useState(false);
-  const [showFilters, setShowFilters] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
 
-  const params = { search, page, page_size: pageSize, branch: branch || undefined, city: city || undefined, ordering: sortBy };
+  const { data: companyList } = useQuery({
+    queryKey: ["company-names"],
+    queryFn: () => api.get<{ id: number; name: string }[]>("/companies/names/").then((r) => r.data),
+  });
+  const companyOptions = (companyList ?? []).map((c) => c.name);
+
+  const appliedCompanyId = (companyList ?? []).find((c) => c.name === applied.company)?.id;
+  const params = {
+    page, page_size: pageSize, ordering: "-id",
+    search: applied.name || undefined,
+    batch: applied.batch || undefined,
+    branch: applied.branch || undefined,
+    company: appliedCompanyId || undefined,
+  };
 
   const { data, isLoading } = useQuery({
     queryKey: ["alumni", params],
@@ -107,6 +130,100 @@ export default function Alumni() {
 
   const total      = data?.count ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  const { data: branchList } = useQuery({
+    queryKey: ["alumni-branches"],
+    queryFn: () => api.get<string[]>("/alumni/branches/").then((r) => r.data),
+  });
+  // Data-driven: follow real usage once alumni exist (so any branch can be
+  // deleted and disappear), seeding from the standard list when empty.
+  const branchOptions = branchList && branchList.length ? branchList : BRANCHES;
+
+  const { data: batchList } = useQuery({
+    queryKey: ["alumni-batches"],
+    queryFn: () => api.get<number[]>("/alumni/batches/").then((r) => r.data),
+  });
+  const batchOptions = batchList ?? [];
+
+  // Pending self-service submissions awaiting review (staff only).
+  const { data: subsData } = useQuery({
+    queryKey: ["alumni-submissions"],
+    queryFn: () => fetchList<any>("/alumni-submissions/", { status: "pending", page_size: 100 }),
+    enabled: writable,
+  });
+  const pendingSubs = subsData?.results ?? [];
+
+  const reviewSub = useMutation({
+    mutationFn: ({ id, verb }: { id: number; verb: "approve" | "reject" }) =>
+      api.post(`/alumni-submissions/${id}/${verb}/`),
+    onSuccess: (_r, v) => {
+      toast.success(v.verb === "approve" ? "Approved & saved to directory" : "Submission rejected");
+      qc.invalidateQueries({ queryKey: ["alumni-submissions"] });
+      qc.invalidateQueries({ queryKey: ["alumni"] });
+      qc.invalidateQueries({ queryKey: ["alumni-branches"] });
+      qc.invalidateQueries({ queryKey: ["company-names"] });
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+    onError: () => toast.error("Could not complete the action"),
+  });
+
+  function runSearch() {
+    setApplied({ name: dName.trim(), batch: dBatch, branch: dBranch, company: dCompany });
+    setPage(1);
+  }
+  function clearFilters() {
+    setDName(""); setDBatch(""); setDBranch(""); setDCompany("");
+    setApplied({ name: "", batch: "", branch: "", company: "" });
+    setPage(1);
+  }
+  const hasFilters = !!(applied.name || applied.batch || applied.branch || applied.company);
+
+  // Reassign everyone on a custom branch to "Other", then refresh suggestions.
+  const deleteBranch = useMutation({
+    mutationFn: (branch: string) => api.post("/alumni/delete_branch/", { branch }),
+    onSuccess: () => {
+      toast.success("Branch removed");
+      qc.invalidateQueries({ queryKey: ["alumni"] });
+      qc.invalidateQueries({ queryKey: ["alumni-branches"] });
+      qc.invalidateQueries({ queryKey: ["students"] });
+    },
+    onError: () => toast.error("Could not remove branch"),
+  });
+
+  // Delete a company record (unlinks any alumni on it), then refresh.
+  const deleteCompany = useMutation({
+    mutationFn: (name: string) => {
+      const id = (companyList ?? []).find((c) => c.name === name)?.id;
+      if (!id) throw new Error("not found");
+      return api.delete(`/companies/${id}/`);
+    },
+    onSuccess: () => {
+      toast.success("Company deleted");
+      qc.invalidateQueries({ queryKey: ["company-names"] });
+      qc.invalidateQueries({ queryKey: ["companies"] });
+      qc.invalidateQueries({ queryKey: ["alumni"] });
+    },
+    onError: () => toast.error("Could not delete company"),
+  });
+
+  // Remove a custom status / role_level value (reassigns alumni off it).
+  const deleteAlumniValue = useMutation({
+    mutationFn: (v: { field: string; value: string; reassign_to: string }) =>
+      api.post("/alumni/delete-value/", v),
+    onSuccess: () => {
+      toast.success("Removed");
+      qc.invalidateQueries({ queryKey: ["alumni"] });
+    },
+    onError: () => toast.error("Could not remove"),
+  });
+
+  // Data-driven values from the loaded rows (seed from base when none in use).
+  const valuesFor = (field: string, base: string[]) => {
+    const seen = Array.from(new Set((data?.results ?? []).map((a) => String((a as any)[field] ?? "")).filter(Boolean)));
+    return seen.length ? seen : base;
+  };
+  const STATUS_BASE = ["active", "passive"];
+  const ROLE_BASE = ROLE_LEVELS.map((r) => r.value);
 
   const save = useMutation({
     mutationFn: async (payload: Record<string, unknown>) => {
@@ -117,9 +234,20 @@ export default function Alumni() {
       setModalOpen(false);
       toast.success(editing ? "Alumni updated" : "Alumni created");
       qc.invalidateQueries({ queryKey: ["alumni"] });
+      qc.invalidateQueries({ queryKey: ["alumni-branches"] });
+      qc.invalidateQueries({ queryKey: ["company-names"] });
+      qc.invalidateQueries({ queryKey: ["companies"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
     },
-    onError: (e: any) => setError(JSON.stringify(e?.response?.data || "Error")),
+    onError: (e: any) => {
+      const data = e?.response?.data;
+      if (data && typeof data === "object") {
+        const first = Object.values(data)[0];
+        setError(Array.isArray(first) ? String(first[0]) : String(first));
+      } else {
+        setError("Could not save. Please try again.");
+      }
+    },
   });
 
   const remove = useMutation({
@@ -131,12 +259,22 @@ export default function Alumni() {
     },
   });
 
-  async function exportCsv() {
-    const res = await api.get("/alumni/export-csv/", { responseType: "blob" });
+  // Excel export of the current filter selections (batch/branch/company/name).
+  async function exportExcel() {
+    const companyId = (companyList ?? []).find((c) => c.name === dCompany)?.id;
+    const exportParams = {
+      search: dName.trim() || undefined,
+      batch: dBatch || undefined,
+      branch: dBranch || undefined,
+      company: companyId || undefined,
+    };
+    const res = await api.get("/alumni/export-xlsx/", { params: exportParams, responseType: "blob" });
     const url = URL.createObjectURL(res.data as Blob);
-    const a = document.createElement("a"); a.href = url; a.download = "alumni.csv"; a.click();
+    const parts = [dBatch && `batch-${dBatch}`, dBranch, dCompany].filter(Boolean);
+    const fname = parts.length ? `alumni-${parts.join("-")}.xlsx` : "alumni.xlsx";
+    const a = document.createElement("a"); a.href = url; a.download = fname; a.click();
     URL.revokeObjectURL(url);
-    toast.success("Exported alumni.csv");
+    toast.success(`Exported ${fname}`);
   }
 
   async function importCsv(e: React.ChangeEvent<HTMLInputElement>) {
@@ -166,22 +304,32 @@ export default function Alumni() {
     setEditing(a);
     const f: Record<string, unknown> = {};
     FIELDS.forEach((field) => { f[field.name] = (a as any)[field.name] ?? (field.type === "checkbox" ? false : ""); });
+    // company is displayed as company_name but submitted as company_input.
+    f.company_input = a.company_name ?? "";
+    f.photo = a.photo ?? "";
     setForm(f); setError(""); setModalOpen(true);
   }
 
   function submit(e: React.FormEvent) {
     e.preventDefault(); setError("");
+    if (!isValidEmail(String(form.email ?? ""))) {
+      setError("Please enter a valid email address (e.g. name@example.com).");
+      return;
+    }
     const payload: Record<string, unknown> = {};
     FIELDS.forEach((field) => {
       const v = form[field.name];
       if (field.type === "checkbox") { payload[field.name] = !!v; return; }
-      if (v === "" || v == null) { if (!field.type || field.type === "email") payload[field.name] = ""; return; }
+      // company_input is always sent (even blank) so an employer can be cleared.
+      if (v === "" || v == null) {
+        if (!field.type || field.type === "email" || field.name === "company_input") payload[field.name] = "";
+        return;
+      }
       payload[field.name] = field.type === "number" ? Number(v) : v;
     });
+    payload.photo = form.photo ?? "";  // custom field, not in FIELDS
     save.mutate(payload);
   }
-
-  function clearFilters() { setBranch(""); setCity(""); setSortBy("-id"); setSearch(""); setPage(1); }
 
   return (
     <div>
@@ -192,29 +340,43 @@ export default function Alumni() {
           <p className="mt-0.5 text-sm text-slate-400">Browse and connect with alumni from our network.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {/* search */}
-          <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm">
-            <span className="text-slate-400">🔍</span>
-            <input
-              placeholder="Search alumni by name, company, batch…"
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-              className="w-56 bg-transparent text-sm text-slate-700 placeholder-slate-400 focus:outline-none"
-            />
-          </div>
+          {/* review pending self-service submissions */}
+          {writable && (
+            <button
+              onClick={() => setReviewOpen(true)}
+              className="relative flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 shadow-sm transition hover:bg-slate-50"
+              title="Review alumni who submitted the public profile form"
+            >
+              🗂 Review
+              {pendingSubs.length > 0 && (
+                <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-600 px-1 text-[11px] font-semibold text-white">
+                  {pendingSubs.length}
+                </span>
+              )}
+            </button>
+          )}
 
-          {/* filter toggle */}
-          <button
-            onClick={() => setShowFilters((p) => !p)}
-            className={`flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-medium transition ${showFilters ? "border-brand-300 bg-brand-50 text-brand-700" : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
-          >
-            ⚙ Filters {(branch || city) && <span className="flex h-4 w-4 items-center justify-center rounded-full bg-brand-600 text-[10px] text-white">!</span>}
-          </button>
+          {/* self-service invite link */}
+          {writable && (
+            <button
+              onClick={() => {
+                const link = `${window.location.origin}/forms/alumni`;
+                navigator.clipboard?.writeText(link).then(
+                  () => toast.success("Invite link copied", link),
+                  () => toast.error("Copy failed", link),
+                );
+              }}
+              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 shadow-sm transition hover:bg-slate-50"
+              title="Copy the public link alumni can use to add/update their own profile"
+            >
+              🔗 Invite link
+            </button>
+          )}
 
-          {/* export */}
+          {/* export / import */}
           <div className="flex items-center rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-            <button onClick={exportCsv} className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 transition">
-              ⬇ Export
+            <button onClick={exportExcel} className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 transition" title="Download the current filter selection as Excel">
+              ⬇ Export Excel
             </button>
             {writable && (
               <>
@@ -240,37 +402,63 @@ export default function Alumni() {
       </div>
 
       {/* ── filter bar ── */}
-      {showFilters && (
-        <div className="mb-4 flex flex-wrap items-end gap-3 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-slate-400">Branch</label>
-            <select value={branch} onChange={(e) => { setBranch(e.target.value); setPage(1); }}
+      <div className="mb-3 rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex min-w-[200px] flex-1 flex-col gap-1">
+            <label className="text-xs font-medium text-slate-500">Alumni Name</label>
+            <div className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 focus-within:border-brand-400">
+              <span className="text-slate-400">🔍</span>
+              <input
+                placeholder="Search by name…"
+                value={dName}
+                onChange={(e) => setDName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") runSearch(); }}
+                className="w-full bg-transparent text-sm text-slate-700 placeholder-slate-400 focus:outline-none"
+              />
+            </div>
+          </div>
+          <div className="flex w-40 flex-col gap-1">
+            <label className="text-xs font-medium text-slate-500">Batch</label>
+            <select value={dBatch} onChange={(e) => setDBatch(e.target.value)}
               className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-brand-400 focus:outline-none">
-              <option value="">All Branches</option>
-              {BRANCHES.map((b) => <option key={b} value={b}>{b}</option>)}
+              <option value="">All batches</option>
+              {batchOptions.map((b) => <option key={b} value={b}>{b}</option>)}
             </select>
           </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-slate-400">Location</label>
-            <input placeholder="All Locations" value={city} onChange={(e) => { setCity(e.target.value); setPage(1); }}
-              className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-brand-400 focus:outline-none w-40" />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-medium text-slate-400">Sort By</label>
-            <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}
+          <div className="flex w-40 flex-col gap-1">
+            <label className="text-xs font-medium text-slate-500">Branch</label>
+            <select value={dBranch} onChange={(e) => setDBranch(e.target.value)}
               className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-brand-400 focus:outline-none">
-              <option value="-id">Newest First</option>
-              <option value="name">Name A–Z</option>
-              <option value="-batch">Batch (Latest)</option>
-              <option value="batch">Batch (Oldest)</option>
-              <option value="-willingness">Willingness</option>
+              <option value="">All branches</option>
+              {branchOptions.map((b) => <option key={b} value={b}>{b}</option>)}
             </select>
           </div>
-          {(branch || city || sortBy !== "-id") && (
-            <button onClick={clearFilters} className="ml-auto text-xs font-semibold text-brand-600 hover:underline">
-              Clear Filters
-            </button>
-          )}
+          <div className="flex w-44 flex-col gap-1">
+            <label className="text-xs font-medium text-slate-500">Company</label>
+            <select value={dCompany} onChange={(e) => setDCompany(e.target.value)}
+              className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-brand-400 focus:outline-none">
+              <option value="">All companies</option>
+              {companyOptions.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <button onClick={runSearch} className="rounded-lg bg-brand-600 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700">
+            Search
+          </button>
+          <button onClick={clearFilters} className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-50">
+            Clear
+          </button>
+        </div>
+      </div>
+
+      {/* ── active-filter summary ── */}
+      {hasFilters && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm text-slate-500">
+          <span>Showing {total} result{total === 1 ? "" : "s"} for:</span>
+          {applied.name && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">Name: {applied.name}</span>}
+          {applied.batch && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">Batch: {applied.batch}</span>}
+          {applied.branch && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">Branch: {applied.branch}</span>}
+          {applied.company && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-600">Company: {applied.company}</span>}
+          <button onClick={clearFilters} className="font-semibold text-brand-600 hover:underline">Clear all</button>
         </div>
       )}
 
@@ -301,9 +489,13 @@ export default function Alumni() {
                     {/* alumni */}
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-3">
-                        <div className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full text-sm font-bold text-white ${avatarColor(a.name)}`}>
-                          {initials(a.name)}
-                        </div>
+                        {a.photo ? (
+                          <img src={a.photo} alt="" className="h-10 w-10 flex-shrink-0 rounded-full object-cover" />
+                        ) : (
+                          <div className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full text-sm font-bold text-white ${avatarColor(a.name)}`}>
+                            {initials(a.name)}
+                          </div>
+                        )}
                         <div>
                           <div className="flex items-center gap-1.5 font-semibold text-slate-800">
                             {a.name}
@@ -401,9 +593,13 @@ export default function Alumni() {
         <Modal open={!!profileAlumnus} onClose={() => setProfileAlumnus(null)} title="Alumni Profile">
           <div className="space-y-4">
             <div className="flex items-center gap-4">
-              <div className={`flex h-16 w-16 flex-shrink-0 items-center justify-center rounded-2xl text-2xl font-bold text-white ${avatarColor(profileAlumnus.name)}`}>
-                {initials(profileAlumnus.name)}
-              </div>
+              {profileAlumnus.photo ? (
+                <img src={profileAlumnus.photo} alt="" className="h-16 w-16 flex-shrink-0 rounded-2xl object-cover" />
+              ) : (
+                <div className={`flex h-16 w-16 flex-shrink-0 items-center justify-center rounded-2xl text-2xl font-bold text-white ${avatarColor(profileAlumnus.name)}`}>
+                  {initials(profileAlumnus.name)}
+                </div>
+              )}
               <div>
                 <div className="flex items-center gap-2 text-lg font-bold text-slate-800">
                   {profileAlumnus.name}
@@ -454,14 +650,165 @@ export default function Alumni() {
         </Modal>
       )}
 
+      {/* ── review submissions modal ── */}
+      <Modal open={reviewOpen} onClose={() => setReviewOpen(false)} title="Pending alumni submissions">
+        {pendingSubs.length === 0 ? (
+          <p className="py-6 text-center text-sm text-slate-400">No pending submissions right now.</p>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-xs text-slate-400">
+              These came in via the public profile form. Approving adds/updates the alumnus in the directory (matched by email).
+            </p>
+            {pendingSubs.map((s: any) => (
+              <div key={s.id} className="rounded-xl border border-slate-200 p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    {s.photo ? (
+                      <img src={s.photo} alt="" className="h-10 w-10 flex-shrink-0 rounded-full object-cover" />
+                    ) : (
+                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-400">👤</div>
+                    )}
+                    <div>
+                      <div className="font-semibold text-slate-800">{s.name}</div>
+                      <div className="text-xs text-slate-400">{s.email}</div>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      onClick={() => reviewSub.mutate({ id: s.id, verb: "approve" })}
+                      disabled={reviewSub.isPending}
+                      className="px-3 py-1.5 text-xs"
+                    >
+                      ✓ Approve
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => { if (confirm(`Reject ${s.name}'s submission?`)) reviewSub.mutate({ id: s.id, verb: "reject" }); }}
+                      disabled={reviewSub.isPending}
+                      className="px-3 py-1.5 text-xs text-red-600"
+                    >
+                      ✕ Reject
+                    </Button>
+                  </div>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-slate-600 sm:grid-cols-3">
+                  <span>Batch: {s.batch}</span>
+                  <span>Branch: {s.branch}</span>
+                  {s.company && <span>Company: {s.company}</span>}
+                  {s.role_level && <span>Role: {s.role_level}</span>}
+                  {s.domain && <span>Domain: {s.domain}</span>}
+                  {s.city && <span>City: {s.city}</span>}
+                  {s.phone && <span>Phone: {s.phone}</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Modal>
+
       {/* ── create/edit modal ── */}
       <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editing ? "Edit Alumni" : "Add Alumni"}>
         <form onSubmit={submit} className="space-y-3">
+          {/* profile photo */}
+          <div className="flex items-center gap-4">
+            {form.photo ? (
+              <img src={String(form.photo)} alt="" className="h-16 w-16 rounded-full object-cover ring-2 ring-slate-200" />
+            ) : (
+              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-100 text-xl text-slate-400">👤</div>
+            )}
+            <div className="flex flex-col gap-1">
+              <label className="cursor-pointer rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50">
+                {form.photo ? "Change photo" : "Upload photo"}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    try {
+                      const dataUrl = await fileToAvatarDataUrl(file);
+                      setForm((f) => ({ ...f, photo: dataUrl }));
+                    } catch {
+                      toast.error("Could not read that image");
+                    }
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              {form.photo && (
+                <button type="button" onClick={() => setForm((f) => ({ ...f, photo: "" }))} className="text-xs text-red-500 hover:underline">
+                  Remove photo
+                </button>
+              )}
+            </div>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             {FIELDS.filter((f) => f.type !== "checkbox").map((f) => (
               <div key={f.name} className={f.name === "name" || f.name === "email" ? "col-span-2" : ""}>
                 <Label>{f.label}{f.required && " *"}</Label>
-                {f.type === "select" ? (
+                {f.name === "branch" ? (
+                  <AddableSelect
+                    value={String(form.branch ?? "")}
+                    options={branchOptions}
+                    onChange={(v) => setForm({ ...form, branch: v })}
+                    required={f.required}
+                    addLabel="➕ Add new branch…"
+                    placeholder="Type new branch (e.g. MBA)"
+                    onDelete={isAdmin ? (b) => deleteBranch.mutate(b) : undefined}
+                  />
+                ) : f.name === "company_input" ? (
+                  <AddableSelect
+                    value={String(form.company_input ?? "")}
+                    options={companyOptions}
+                    onChange={(v) => setForm({ ...form, company_input: v })}
+                    addLabel="➕ Add new company…"
+                    placeholder="Type new company (e.g. TCS)"
+                    onDelete={isAdmin ? (c) => deleteCompany.mutate(c) : undefined}
+                  />
+                ) : f.name === "phone" ? (
+                  <Input
+                    type="tel"
+                    inputMode="tel"
+                    value={String(form.phone ?? "")}
+                    // Strip anything that isn't a digit or a valid phone symbol (+ - space ( )).
+                    onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/[^\d+\-()\s]/g, "") })}
+                    required={f.required}
+                  />
+                ) : f.name === "email" ? (
+                  <>
+                    <Input
+                      type="email"
+                      value={String(form.email ?? "")}
+                      onChange={(e) => setForm({ ...form, email: e.target.value })}
+                      required={f.required}
+                    />
+                    {String(form.email ?? "").trim().length > 0 && !isValidEmail(String(form.email)) && (
+                      <p className="mt-1 text-xs text-red-600">Please enter a valid email address (e.g. name@example.com).</p>
+                    )}
+                  </>
+                ) : f.name === "status" ? (
+                  <AddableSelect
+                    value={String(form.status ?? "")}
+                    options={valuesFor("status", STATUS_BASE)}
+                    onChange={(v) => setForm({ ...form, status: v })}
+                    addLabel="➕ Add new status…"
+                    placeholder="Type new status"
+                    onDelete={isAdmin ? (v) => deleteAlumniValue.mutate({ field: "status", value: v, reassign_to: v === "active" ? "" : "active" }) : undefined}
+                  />
+                ) : f.name === "role_level" ? (
+                  <AddableSelect
+                    value={String(form.role_level ?? "")}
+                    options={valuesFor("role_level", ROLE_BASE)}
+                    onChange={(v) => setForm({ ...form, role_level: v })}
+                    addLabel="➕ Add new role level…"
+                    placeholder="Type new role level"
+                    onDelete={isAdmin ? (v) => deleteAlumniValue.mutate({ field: "role_level", value: v, reassign_to: "" }) : undefined}
+                  />
+                ) : f.type === "select" ? (
                   <Select value={String(form[f.name] ?? "")} onChange={(e) => setForm({ ...form, [f.name]: e.target.value })} required={f.required}>
                     <option value="">— select —</option>
                     {(f as any).options?.map((o: any) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -470,14 +817,6 @@ export default function Alumni() {
                   <Input type={f.type || "text"} value={String(form[f.name] ?? "")} onChange={(e) => setForm({ ...form, [f.name]: e.target.value })} required={f.required} />
                 )}
               </div>
-            ))}
-          </div>
-          <div className="flex gap-4">
-            {FIELDS.filter((f) => f.type === "checkbox").map((f) => (
-              <label key={f.name} className="flex items-center gap-2 text-sm text-slate-700">
-                <input type="checkbox" checked={!!form[f.name]} onChange={(e) => setForm({ ...form, [f.name]: e.target.checked })} />
-                {f.label}
-              </label>
             ))}
           </div>
           {error && <p className="text-xs text-red-600">{error}</p>}

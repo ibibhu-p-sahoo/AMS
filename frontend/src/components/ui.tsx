@@ -1,7 +1,110 @@
-import { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
+import { ButtonHTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes, useState } from "react";
 
 export function cn(...classes: (string | false | undefined)[]) {
   return classes.filter(Boolean).join(" ");
+}
+
+const ADD_NEW = "__add_new__";
+
+/** Dropdown with an inline "➕ Add new…" option. Picking it swaps the dropdown
+ *  for a text field so a brand-new value can be typed and saved (↩ reverts).
+ *  Use for free-text value lists (branch, company, sector, …) — NOT for fixed
+ *  enums whose backend rejects unknown values. */
+export function AddableSelect({
+  value,
+  options,
+  onChange,
+  required,
+  addLabel = "➕ Add new…",
+  placeholder = "Type a new value",
+  onDelete,
+  deletable,
+}: {
+  value: string;
+  options: string[];
+  onChange: (v: string) => void;
+  required?: boolean;
+  addLabel?: string;
+  placeholder?: string;
+  // When provided, a "Manage" toggle reveals removable chips. onDelete is called
+  // (after a confirm) for the chosen value; it should delete the underlying data.
+  onDelete?: (value: string) => void;
+  deletable?: string[];
+}) {
+  const [adding, setAdding] = useState(!!value && !options.includes(value));
+  const [managing, setManaging] = useState(false);
+
+  const removable = (deletable ?? options).filter(Boolean);
+
+  if (adding) {
+    return (
+      <div className="flex gap-2">
+        <Input
+          autoFocus
+          placeholder={placeholder}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          required={required}
+        />
+        <Button type="button" variant="outline" onClick={() => { onChange(""); setAdding(false); }}>
+          ↩
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="flex gap-2">
+        <Select
+          value={value}
+          onChange={(e) => {
+            if (e.target.value === ADD_NEW) { onChange(""); setAdding(true); }
+            else onChange(e.target.value);
+          }}
+          required={required}
+        >
+          <option value="">— select —</option>
+          {options.map((o) => <option key={o} value={o}>{o}</option>)}
+          <option value={ADD_NEW}>{addLabel}</option>
+        </Select>
+        {onDelete && (
+          <Button
+            type="button"
+            variant="outline"
+            title="Delete an option"
+            onClick={() => setManaging((m) => !m)}
+          >
+            🗑
+          </Button>
+        )}
+      </div>
+
+      {managing && onDelete && (
+        <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 p-2">
+          {removable.length === 0 ? (
+            <p className="text-xs text-slate-400">Nothing to remove.</p>
+          ) : (
+            <div className="flex flex-wrap gap-1.5">
+              {removable.map((o) => (
+                <span key={o} className="inline-flex items-center gap-1 rounded-full bg-white border border-slate-200 px-2 py-0.5 text-xs text-slate-700">
+                  {o}
+                  <button
+                    type="button"
+                    className="text-red-500 hover:text-red-700"
+                    title={`Delete "${o}"`}
+                    onClick={() => { if (confirm(`Delete "${o}"? This cannot be undone.`)) onDelete(o); }}
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function Button({

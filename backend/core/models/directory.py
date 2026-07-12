@@ -17,6 +17,7 @@ class Branch(models.TextChoices):
     EEE = "EEE", "Electrical & Electronics"
     MECH = "Mech", "Mechanical"
     CIVIL = "Civil", "Civil"
+    MBA = "MBA", "MBA"
     OTHER = "Other", "Other"
 
 
@@ -51,6 +52,10 @@ class Alumni(TimeStamped):
 
     name = models.CharField(max_length=150)
     batch = models.PositiveIntegerField(help_text="Graduation year")
+    dob = models.DateField(null=True, blank=True, help_text="Date of birth")
+    # Small avatar stored inline as a data URL (resized client-side) — avoids a
+    # separate media pipeline while persisting in the DB.
+    photo = models.TextField(blank=True, help_text="Profile photo (data URL)")
     branch = models.CharField(max_length=20, choices=Branch.choices)
     company = models.ForeignKey(
         Company, null=True, blank=True, on_delete=models.SET_NULL, related_name="alumni"
@@ -101,6 +106,44 @@ class Alumni(TimeStamped):
 
     def __str__(self):
         return f"{self.name} ({self.batch}/{self.branch})"
+
+
+class AlumniSubmission(TimeStamped):
+    """A self-service alumni profile submission (public form) awaiting review.
+    On approval it creates/updates the matching Alumni record."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+
+    name = models.CharField(max_length=150)
+    email = models.EmailField()
+    batch = models.PositiveIntegerField()
+    branch = models.CharField(max_length=20)
+    company = models.CharField(max_length=200, blank=True)
+    role_level = models.CharField(max_length=20, blank=True)
+    domain = models.CharField(max_length=120, blank=True)
+    city = models.CharField(max_length=120, blank=True)
+    phone = models.CharField(max_length=30, blank=True)
+    linkedin = models.CharField(max_length=200, blank=True)
+    photo = models.TextField(blank=True, help_text="Profile photo (data URL)")
+    status = models.CharField(
+        max_length=10, choices=Status.choices, default=Status.PENDING
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="reviewed_submissions",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.name} <{self.email}> ({self.status})"
 
 
 class Student(TimeStamped):

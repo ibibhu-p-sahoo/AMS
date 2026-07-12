@@ -1,4 +1,4 @@
-from .directory import Alumni, Company, Student
+from .directory import Alumni, AlumniSubmission, Company, Student
 from .outreach import MessageTemplate, OutreachCampaign, OutreachContact
 from .events import Event, EventParticipant
 from .referrals import ReferralLead
@@ -11,6 +11,7 @@ from .notifications import Notification
 __all__ = [
     "Company",
     "Alumni",
+    "AlumniSubmission",
     "Student",
     "MessageTemplate",
     "OutreachCampaign",

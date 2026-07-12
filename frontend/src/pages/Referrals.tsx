@@ -87,8 +87,8 @@ export default function Referrals() {
         { name: "student", label: "Student", type: "select", options: students },
         { name: "company", label: "Company", type: "select", options: companies },
         { name: "alumni", label: "Referrer (alumnus)", type: "select", options: alumni },
-        { name: "stage", label: "Stage", type: "select", options: STAGES },
-        { name: "outcome", label: "Outcome", type: "select", options: OUTCOMES },
+        { name: "stage", label: "Stage", type: "addable", options: STAGES },
+        { name: "outcome", label: "Outcome", type: "addable", options: OUTCOMES },
         { name: "notes", label: "Notes", type: "textarea" },
       ]}
     />
