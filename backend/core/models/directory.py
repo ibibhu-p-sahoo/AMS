@@ -78,6 +78,14 @@ class Alumni(TimeStamped):
     interests = models.CharField(
         max_length=400, blank=True, help_text="Comma-separated interests"
     )
+    source = models.CharField(
+        max_length=120, blank=True,
+        help_text="How this alumnus was added (e.g. LinkedIn, Referral, Event)",
+    )
+    referred_by = models.CharField(
+        max_length=150, blank=True,
+        help_text="Name of the person who referred this alumnus",
+    )
     status = models.CharField(
         max_length=10, choices=Status.choices, default=Status.ACTIVE
     )
@@ -127,6 +135,8 @@ class AlumniSubmission(TimeStamped):
     city = models.CharField(max_length=120, blank=True)
     phone = models.CharField(max_length=30, blank=True)
     linkedin = models.CharField(max_length=200, blank=True)
+    source = models.CharField(max_length=120, blank=True)
+    referred_by = models.CharField(max_length=150, blank=True)
     photo = models.TextField(blank=True, help_text="Profile photo (data URL)")
     status = models.CharField(
         max_length=10, choices=Status.choices, default=Status.PENDING

@@ -5,6 +5,7 @@ from .public import PublicAlumniView, PublicEventsView, PublicJobIntelView, Publ
 from .views import (
     AlumniSubmissionViewSet,
     AlumniViewSet,
+    AnalyticsExportView,
     AnalyticsView,
     AuditLogViewSet,
     CompanyViewSet,
@@ -42,6 +43,7 @@ router.register("audit-log", AuditLogViewSet)
 urlpatterns = [
     path("dashboard/", DashboardView.as_view(), name="dashboard"),
     path("analytics/", AnalyticsView.as_view(), name="analytics"),
+    path("analytics/export/", AnalyticsExportView.as_view(), name="analytics-export"),
     # Public, no-login forms (PRD §8)
     path("public/events/", PublicEventsView.as_view(), name="public-events"),
     path("public/rsvp/", PublicRsvpView.as_view(), name="public-rsvp"),

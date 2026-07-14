@@ -16,7 +16,8 @@ const ROLE_LEVELS = [
 
 const EMPTY = {
   name: "", email: "", batch: "", branch: "", company: "",
-  role_level: "", domain: "", city: "", phone: "", linkedin: "", photo: "",
+  role_level: "", domain: "", city: "", phone: "", linkedin: "",
+  source: "", referred_by: "", photo: "",
 };
 
 export default function PublicAlumniForm() {
@@ -123,39 +124,50 @@ export default function PublicAlumniForm() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <Label>Company</Label>
-                <Input value={form.company} onChange={(e) => set("company", e.target.value)} placeholder="e.g. Google" />
+                <Label>Company *</Label>
+                <Input value={form.company} onChange={(e) => set("company", e.target.value)} placeholder="e.g. Google" required />
               </div>
               <div>
-                <Label>Role level</Label>
-                <Select value={form.role_level} onChange={(e) => set("role_level", e.target.value)}>
+                <Label>Role level *</Label>
+                <Select value={form.role_level} onChange={(e) => set("role_level", e.target.value)} required>
                   {ROLE_LEVELS.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
                 </Select>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <Label>Domain / role</Label>
-                <Input value={form.domain} onChange={(e) => set("domain", e.target.value)} placeholder="e.g. Backend" />
+                <Label>Domain / role *</Label>
+                <Input value={form.domain} onChange={(e) => set("domain", e.target.value)} placeholder="e.g. Backend" required />
               </div>
               <div>
-                <Label>City</Label>
-                <Input value={form.city} onChange={(e) => set("city", e.target.value)} placeholder="e.g. Bengaluru" />
+                <Label>City *</Label>
+                <Input value={form.city} onChange={(e) => set("city", e.target.value)} placeholder="e.g. Bengaluru" required />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <Label>Phone</Label>
+                <Label>Phone *</Label>
                 <Input
                   type="tel"
                   inputMode="tel"
                   value={form.phone}
                   onChange={(e) => set("phone", e.target.value.replace(/[^\d+\-()\s]/g, ""))}
+                  required
                 />
               </div>
               <div>
-                <Label>LinkedIn</Label>
-                <Input value={form.linkedin} onChange={(e) => set("linkedin", e.target.value)} placeholder="linkedin.com/in/…" />
+                <Label>LinkedIn *</Label>
+                <Input value={form.linkedin} onChange={(e) => set("linkedin", e.target.value)} placeholder="linkedin.com/in/…" required />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>Source *</Label>
+                <Input value={form.source} onChange={(e) => set("source", e.target.value)} placeholder="e.g. LinkedIn, Referral, Event" required />
+              </div>
+              <div>
+                <Label>Referred by *</Label>
+                <Input value={form.referred_by} onChange={(e) => set("referred_by", e.target.value)} placeholder="Name of person who referred you" required />
               </div>
             </div>
             {error && <p className="text-sm text-red-600">{error}</p>}

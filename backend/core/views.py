@@ -1,5 +1,6 @@
 from django.core.mail import send_mail
 from django.db.models import Count, Q
+from django.http import HttpResponse
 from django.utils import timezone
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -137,8 +138,8 @@ class AlumniViewSet(CsvMixin, AuditedModelViewSet):
     csv_filename = "alumni"
     csv_columns = [
         "name", "batch", "branch", "company", "role_level", "domain",
-        "city", "email", "phone", "linkedin", "status",
-        "is_super_alumni", "willingness",
+        "city", "email", "phone", "linkedin", "source", "referred_by",
+        "status", "is_super_alumni", "willingness",
     ]
 
     def perform_create(self, serializer):
@@ -190,6 +191,7 @@ class AlumniViewSet(CsvMixin, AuditedModelViewSet):
             "company": obj.company.name if obj.company else "",
             "role_level": obj.role_level, "domain": obj.domain, "city": obj.city,
             "email": obj.email, "phone": obj.phone, "linkedin": obj.linkedin,
+            "source": obj.source, "referred_by": obj.referred_by,
             "status": obj.status, "is_super_alumni": obj.is_super_alumni,
             "willingness": obj.willingness,
         }
@@ -222,6 +224,10 @@ class AlumniViewSet(CsvMixin, AuditedModelViewSet):
             defaults["phone"] = (row["phone"] or "").strip()
         if "linkedin" in row:
             defaults["linkedin"] = (row["linkedin"] or "").strip()
+        if "source" in row:
+            defaults["source"] = (row["source"] or "").strip()
+        if "referred_by" in row:
+            defaults["referred_by"] = (row["referred_by"] or "").strip()
         if "status" in row:
             defaults["status"] = (row["status"] or "active").strip()
         if "is_super_alumni" in row:
@@ -269,7 +275,7 @@ class AlumniSubmissionViewSet(
             existing.consent_given = True
             if cname:
                 existing.company = company
-            for key in ("role_level", "domain", "city", "phone", "linkedin", "photo"):
+            for key in ("role_level", "domain", "city", "phone", "linkedin", "source", "referred_by", "photo"):
                 if getattr(sub, key):
                     setattr(existing, key, getattr(sub, key))
             existing.updated_by = user
@@ -278,7 +284,8 @@ class AlumniSubmissionViewSet(
         alum = Alumni.objects.create(
             name=sub.name, email=sub.email, batch=sub.batch, branch=sub.branch,
             company=company, role_level=sub.role_level, domain=sub.domain,
-            city=sub.city, phone=sub.phone, linkedin=sub.linkedin, photo=sub.photo,
+            city=sub.city, phone=sub.phone, linkedin=sub.linkedin,
+            source=sub.source, referred_by=sub.referred_by, photo=sub.photo,
             status=Alumni.Status.ACTIVE, consent_given=True, updated_by=user,
         )
         return alum, True
@@ -820,140 +827,375 @@ class DashboardView(APIView):
         return Response(data)
 
 
+MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+
+
+def resolve_report_range(request):
+    """Turn ?period / ?start / ?end query params into a [start, end) window.
+
+    `period`: this_month | this_year | last_year | all  (default this_year).
+    `start`/`end`: explicit YYYY-MM-DD dates (inclusive), override `period`.
+    Returns (start, end, label) — start may be None only internally; callers
+    get a concrete start floored to the earliest data row for "all".
+    """
+    from datetime import datetime, timedelta
+
+    now = timezone.now()
+    tz = now.tzinfo
+
+    def parse_day(s):
+        try:
+            return datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=tz)
+        except (ValueError, TypeError):
+            return None
+
+    start = parse_day(request.query_params.get("start"))
+    end_raw = parse_day(request.query_params.get("end"))
+    end = (end_raw + timedelta(days=1)) if end_raw else None
+
+    if start or end:
+        label = "Custom range"
+    else:
+        period = (request.query_params.get("period") or "this_year").lower()
+        if period == "this_month":
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            label = now.strftime("%B %Y")
+        elif period == "last_year":
+            start = now.replace(year=now.year - 1, month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+            end = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+            label = str(now.year - 1)
+        elif period == "all":
+            start = None
+            label = "All time"
+        else:  # this_year
+            start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+            label = str(now.year)
+
+    if end is None:
+        end = now + timedelta(days=1)
+    if start is None:
+        first = Alumni.objects.order_by("created_at").values_list("created_at", flat=True).first()
+        start = first or end.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    return start, end, label
+
+
+def build_analytics(start, end):
+    """Compute the full Reports & Analytics payload for the window [start, end)."""
+    from datetime import timedelta
+
+    from django.db.models.functions import TruncMonth
+
+    end_incl = end - timedelta(seconds=1)
+    multi_year = start.year != end_incl.year
+
+    # list of (year, month) buckets spanning the window
+    buckets, y, m = [], start.year, start.month
+    while (y, m) <= (end_incl.year, end_incl.month):
+        buckets.append((y, m))
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+
+    def blabel(y, m):
+        return MONTHS_SHORT[m - 1] + (f" '{y % 100:02d}" if multi_year else "")
+
+    def monthly_map(qs):
+        rows = (
+            qs.filter(created_at__gte=start, created_at__lt=end)
+            .annotate(month=TruncMonth("created_at"))
+            .values("month")
+            .annotate(count=Count("id"))
+        )
+        return {(r["month"].year, r["month"].month): r["count"] for r in rows}
+
+    def pct(new_this, prior):
+        return round((new_this / prior) * 100, 1) if prior else None
+
+    # population as of the end of the window
+    alumni_qs = Alumni.objects.filter(created_at__lt=end)
+
+    # new-in-window vs equal-length prior window (real growth %)
+    prior_start = start - (end - start)
+
+    def new_vs_prior(model):
+        cur = model.objects.filter(created_at__gte=start, created_at__lt=end).count()
+        prev = model.objects.filter(created_at__gte=prior_start, created_at__lt=start).count()
+        return pct(cur, prev)
+
+    kpis = {
+        "alumni_total": alumni_qs.count(),
+        "alumni_growth_pct": new_vs_prior(Alumni),
+        "alumni_active": alumni_qs.filter(status="active").count(),
+        "events_total": Event.objects.filter(created_at__lt=end).count(),
+        "events_growth_pct": new_vs_prior(Event),
+        "jobs_total": JobPosting.objects.filter(created_at__lt=end).count(),
+        "jobs_growth_pct": new_vs_prior(JobPosting),
+        "companies_total": Company.objects.filter(created_at__lt=end).count(),
+        "super_alumni": alumni_qs.filter(is_super_alumni=True).count(),
+    }
+
+    # cumulative alumni growth across the window
+    growth_map = monthly_map(Alumni.objects)
+    base = Alumni.objects.filter(created_at__lt=start).count()
+    alumni_growth, running = [], base
+    for (yy, mm) in buckets:
+        running += growth_map.get((yy, mm), 0)
+        alumni_growth.append({"month": blabel(yy, mm), "alumni": running})
+
+    # by location (top cities)
+    loc_rows = list(
+        alumni_qs.exclude(city="").values("city")
+        .annotate(count=Count("id")).order_by("-count")
+    )
+    by_location = [{"label": r["city"], "value": r["count"]} for r in loc_rows[:6]]
+    other_loc = sum(r["count"] for r in loc_rows[6:])
+    if other_loc:
+        by_location.append({"label": "Others", "value": other_loc})
+
+    # by industry (domain)
+    norm = {}
+    for r in alumni_qs.values("domain").annotate(count=Count("id")):
+        key = (r["domain"] or "Other").strip() or "Other"
+        norm[key] = norm.get(key, 0) + r["count"]
+    ind_sorted = sorted(norm.items(), key=lambda kv: -kv[1])
+    by_industry = [{"label": k, "value": v} for k, v in ind_sorted[:5]]
+    other_ind = sum(v for _, v in ind_sorted[5:])
+    if other_ind:
+        by_industry.append({"label": "Others", "value": other_ind})
+
+    # by branch
+    by_branch = [
+        {"label": r["branch"], "value": r["count"]}
+        for r in alumni_qs.values("branch").annotate(count=Count("id")).order_by("-count")
+    ]
+
+    # engagement over time (events + jobs per month)
+    ev, jb = monthly_map(Event.objects), monthly_map(JobPosting.objects)
+    engagement = [
+        {"month": blabel(yy, mm),
+         "events": ev.get((yy, mm), 0),
+         "jobs": jb.get((yy, mm), 0)}
+        for (yy, mm) in buckets
+    ]
+
+    # top active alumni (by willingness to help)
+    top_alumni = [
+        {
+            "id": a.id, "name": a.name,
+            "role_level": a.role_level,
+            "company": a.company.name if a.company else "",
+            "willingness": a.willingness,
+            "is_super_alumni": a.is_super_alumni,
+        }
+        for a in alumni_qs.select_related("company").order_by(
+            "-is_super_alumni", "-willingness", "name"
+        )[:5]
+    ]
+
+    return {
+        "kpis": kpis,
+        "alumni_growth": alumni_growth,
+        "by_location": by_location,
+        "by_industry": by_industry,
+        "by_branch": by_branch,
+        "engagement": engagement,
+        "top_alumni": top_alumni,
+    }
+
+
 class AnalyticsView(APIView):
-    """Reports & Analytics — richer aggregates for the reporting dashboard."""
+    """Reports & Analytics — richer aggregates for the reporting dashboard.
+
+    Accepts ?period=this_month|this_year|last_year|all or ?start=&end= dates.
+    """
 
     permission_classes = [RolePermission]
     read_roles = {Role.ADMIN, Role.COORDINATOR, Role.VOLUNTEER}
 
     def get(self, request):
-        from django.db.models.functions import TruncMonth
-
-        now = timezone.now()
-        year_start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
-        last_year_start = year_start.replace(year=year_start.year - 1)
-        months_short = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
-
-        def pct(new_this, prior):
-            if prior:
-                return round((new_this / prior) * 100, 1)
-            return None
-
-        def monthly_series(qs, label):
-            """Count of rows created per month (current year) → chart-ready list."""
-            rows = (
-                qs.filter(created_at__gte=year_start)
-                .annotate(month=TruncMonth("created_at"))
-                .values("month")
-                .annotate(count=Count("id"))
-            )
-            m = {r["month"].month: r["count"] for r in rows}
-            return [{"month": months_short[i - 1], label: m.get(i, 0)} for i in range(1, now.month + 1)]
-
-        # ── KPI cards with real YoY growth ──
-        alumni_qs = Alumni.objects.all()
-        alumni_this_year = alumni_qs.filter(created_at__gte=year_start).count()
-        alumni_last_year = alumni_qs.filter(
-            created_at__gte=last_year_start, created_at__lt=year_start
-        ).count()
-        events_this_year = Event.objects.filter(created_at__gte=year_start).count()
-        events_last_year = Event.objects.filter(
-            created_at__gte=last_year_start, created_at__lt=year_start
-        ).count()
-        jobs_this_year = JobPosting.objects.filter(created_at__gte=year_start).count()
-        jobs_last_year = JobPosting.objects.filter(
-            created_at__gte=last_year_start, created_at__lt=year_start
-        ).count()
-
-        kpis = {
-            "alumni_total": alumni_qs.count(),
-            "alumni_growth_pct": pct(alumni_this_year, alumni_last_year),
-            "alumni_active": alumni_qs.filter(status="active").count(),
-            "events_total": Event.objects.count(),
-            "events_growth_pct": pct(events_this_year, events_last_year),
-            "jobs_total": JobPosting.objects.count(),
-            "jobs_growth_pct": pct(jobs_this_year, jobs_last_year),
-            "companies_total": Company.objects.count(),
-            "super_alumni": alumni_qs.filter(is_super_alumni=True).count(),
+        start, end, label = resolve_report_range(request)
+        data = build_analytics(start, end)
+        data["range"] = {
+            "label": label,
+            "start": start.date().isoformat(),
+            "end": (end - timezone.timedelta(days=1)).date().isoformat(),
         }
+        return Response(data)
 
-        # ── Alumni growth over time (cumulative) ──
-        monthly_new = (
-            alumni_qs.filter(created_at__gte=year_start)
-            .annotate(month=TruncMonth("created_at"))
-            .values("month")
-            .annotate(count=Count("id"))
+
+class AnalyticsExportView(APIView):
+    """Excel (.xlsx) export of the Reports & Analytics data for a date range.
+
+    Same query params as AnalyticsView (period / start / end)."""
+
+    permission_classes = [RolePermission]
+    read_roles = {Role.ADMIN, Role.COORDINATOR, Role.VOLUNTEER}
+
+    def get(self, request):
+        import io
+
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+        from openpyxl.utils import get_column_letter
+
+        start, end, label = resolve_report_range(request)
+        d = build_analytics(start, end)
+        k = d["kpis"]
+        start_s = start.date().isoformat()
+        end_s = (end - timezone.timedelta(days=1)).date().isoformat()
+
+        # ── shared styles ──
+        TITLE_FONT = Font(bold=True, size=15, color="1E293B")
+        SUB_FONT = Font(italic=True, size=9, color="64748B")
+        HEAD_FONT = Font(bold=True, color="FFFFFF")
+        HEAD_FILL = PatternFill("solid", fgColor="4F46E5")
+        TOTAL_FONT = Font(bold=True, color="1E293B")
+        TOTAL_FILL = PatternFill("solid", fgColor="EEF2FF")
+        thin = Side(style="thin", color="E2E8F0")
+        BORDER = Border(left=thin, right=thin, top=thin, bottom=thin)
+        CENTER = Alignment(horizontal="center", vertical="center")
+
+        wb = Workbook()
+        pct = lambda v: "N/A" if v is None else f"{v}%"
+
+        def styled_sheet(title, headers, rows, first=False, totals=None):
+            """Write a titled, colour-headed, auto-width table with borders."""
+            ws = wb.active if first else wb.create_sheet()
+            ws.title = title[:31]
+            ncol = len(headers)
+
+            ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncol)
+            tc = ws.cell(row=1, column=1, value=title)
+            tc.font = TITLE_FONT
+            ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncol)
+            sc = ws.cell(row=2, column=1, value=f"{label}  ·  {start_s} → {end_s}")
+            sc.font = SUB_FONT
+            ws.row_dimensions[1].height = 22
+
+            hrow = 4
+            for j, h in enumerate(headers, 1):
+                c = ws.cell(row=hrow, column=j, value=h)
+                c.font = HEAD_FONT
+                c.fill = HEAD_FILL
+                c.alignment = CENTER
+                c.border = BORDER
+            for i, row in enumerate(rows, hrow + 1):
+                for j, val in enumerate(row, 1):
+                    c = ws.cell(row=i, column=j, value=val)
+                    c.border = BORDER
+                    if j > 1 and isinstance(val, (int, float)):
+                        c.alignment = CENTER
+            if totals:
+                trow = hrow + 1 + len(rows)
+                for j, val in enumerate(totals, 1):
+                    c = ws.cell(row=trow, column=j, value=val)
+                    c.font = TOTAL_FONT
+                    c.fill = TOTAL_FILL
+                    c.border = BORDER
+                    if j > 1 and isinstance(val, (int, float)):
+                        c.alignment = CENTER
+
+            # auto width from content
+            all_rows = rows + ([totals] if totals else [])
+            for j, h in enumerate(headers, 1):
+                width = len(str(h))
+                for row in all_rows:
+                    if j - 1 < len(row):
+                        width = max(width, len(str(row[j - 1])))
+                ws.column_dimensions[get_column_letter(j)].width = min(46, max(12, width + 3))
+            ws.freeze_panes = ws.cell(row=hrow + 1, column=1)
+            return ws
+
+        # ── extra headline numbers (make the summary feel complete) ──
+        students_total = Student.objects.filter(created_at__lt=end).count()
+        companies_placement = Company.objects.filter(
+            created_at__lt=end, is_in_placement_list=True
+        ).count()
+        referrals_open = ReferralLead.objects.filter(created_at__lt=end).exclude(stage="closed").count()
+        referrals_placed = ReferralLead.objects.filter(created_at__lt=end, outcome="placed").count()
+        campaigns_total = OutreachCampaign.objects.filter(created_at__lt=end).count()
+        events_upcoming = Event.objects.filter(date__gte=timezone.now()).count()
+
+        styled_sheet("Summary", ["Metric", "Value"], [
+            ["Report period", label],
+            ["From", start_s],
+            ["To", end_s],
+            ["Total Alumni", k["alumni_total"]],
+            ["Alumni growth (vs previous period)", pct(k["alumni_growth_pct"])],
+            ["Active Alumni", k["alumni_active"]],
+            ["Super Alumni", k["super_alumni"]],
+            ["Total Students", students_total],
+            ["Events Organized", k["events_total"]],
+            ["Upcoming Events", events_upcoming],
+            ["Events growth (vs previous period)", pct(k["events_growth_pct"])],
+            ["Jobs Posted", k["jobs_total"]],
+            ["Jobs growth (vs previous period)", pct(k["jobs_growth_pct"])],
+            ["Companies", k["companies_total"]],
+            ["Companies in placement list", companies_placement],
+            ["Open Referrals", referrals_open],
+            ["Placed Referrals", referrals_placed],
+            ["Outreach Campaigns", campaigns_total],
+        ], first=True)
+
+        # cumulative growth + new-per-month derived from the cumulative series
+        growth_rows, prev = [], None
+        for r in d["alumni_growth"]:
+            new = r["alumni"] - prev if prev is not None else r["alumni"]
+            growth_rows.append([r["month"], r["alumni"], max(0, new)])
+            prev = r["alumni"]
+        styled_sheet("Alumni Growth", ["Month", "Cumulative Alumni", "New this month"], growth_rows)
+
+        def share_sheet(title, head, items):
+            total = sum(i["value"] for i in items) or 1
+            rows = [[i["label"], i["value"], f"{round(i['value'] / total * 100)}%"] for i in items]
+            styled_sheet(title, [head, "Alumni", "Share"], rows,
+                         totals=["Total", sum(i["value"] for i in items), "100%"])
+
+        share_sheet("By Location", "Location", d["by_location"])
+        share_sheet("By Industry", "Industry", d["by_industry"])
+        share_sheet("By Branch", "Branch", d["by_branch"])
+
+        styled_sheet("Engagement", ["Month", "Events", "Jobs"],
+                     [[r["month"], r["events"], r["jobs"]] for r in d["engagement"]],
+                     totals=["Total",
+                             sum(r["events"] for r in d["engagement"]),
+                             sum(r["jobs"] for r in d["engagement"])])
+
+        styled_sheet("Top Alumni", ["Name", "Role", "Company", "Willingness (1-5)", "Super Alumni"],
+                     [[a["name"], a["role_level"] or "—", a["company"] or "—", a["willingness"],
+                       "Yes" if a["is_super_alumni"] else "No"] for a in d["top_alumni"]])
+
+        # ── full alumni roster within the period (the real "data") ──
+        roster = (
+            Alumni.objects.filter(created_at__lt=end)
+            .select_related("company").order_by("name")
         )
-        growth_map = {r["month"].month: r["count"] for r in monthly_new}
-        base = alumni_qs.filter(created_at__lt=year_start).count()
-        alumni_growth, running = [], base
-        for i in range(1, now.month + 1):
-            running += growth_map.get(i, 0)
-            alumni_growth.append({"month": months_short[i - 1], "alumni": running})
-
-        # ── by location (top cities) ──
-        loc_rows = (
-            alumni_qs.exclude(city="").values("city")
-            .annotate(count=Count("id")).order_by("-count")
+        roster_rows = [
+            [
+                a.name, a.batch, a.branch,
+                a.company.name if a.company else "—",
+                a.role_level or "—", a.domain or "—", a.city or "—",
+                a.email, a.phone or "—",
+                a.source or "—", a.referred_by or "—",
+                a.status,
+            ]
+            for a in roster
+        ]
+        styled_sheet(
+            "All Alumni",
+            ["Name", "Batch", "Branch", "Company", "Role", "Domain", "City",
+             "Email", "Phone", "Source", "Referred by", "Status"],
+            roster_rows,
         )
-        loc_rows = list(loc_rows)
-        top_loc = loc_rows[:6]
-        other_loc = sum(r["count"] for r in loc_rows[6:])
-        by_location = [{"label": r["city"], "value": r["count"]} for r in top_loc]
-        if other_loc:
-            by_location.append({"label": "Others", "value": other_loc})
 
-        # ── by industry (domain) ──
-        ind_rows = list(
-            alumni_qs.values("domain").annotate(count=Count("id")).order_by("-count")
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        fname = f"analytics-report_{start_s}_to_{end_s}.xlsx"
+        resp = HttpResponse(
+            buf.getvalue(),
+            content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-        norm = {}
-        for r in ind_rows:
-            key = (r["domain"] or "Other").strip() or "Other"
-            norm[key] = norm.get(key, 0) + r["count"]
-        ind_sorted = sorted(norm.items(), key=lambda kv: -kv[1])
-        top_ind = ind_sorted[:5]
-        other_ind = sum(v for _, v in ind_sorted[5:])
-        by_industry = [{"label": k, "value": v} for k, v in top_ind]
-        if other_ind:
-            by_industry.append({"label": "Others", "value": other_ind})
-
-        # ── by branch (second donut) ──
-        by_branch = [
-            {"label": r["branch"], "value": r["count"]}
-            for r in alumni_qs.values("branch").annotate(count=Count("id")).order_by("-count")
-        ]
-
-        # ── engagement over time (events + jobs per month) ──
-        ev = {d["month"]: d["events"] for d in monthly_series(Event.objects, "events")}
-        jb = {d["month"]: d["jobs"] for d in monthly_series(JobPosting.objects, "jobs")}
-        engagement = [
-            {"month": months_short[i - 1],
-             "events": ev.get(months_short[i - 1], 0),
-             "jobs": jb.get(months_short[i - 1], 0)}
-            for i in range(1, now.month + 1)
-        ]
-
-        # ── top active alumni (by willingness to help) ──
-        top_alumni = [
-            {
-                "id": a.id, "name": a.name,
-                "role_level": a.role_level,
-                "company": a.company.name if a.company else "",
-                "willingness": a.willingness,
-                "is_super_alumni": a.is_super_alumni,
-            }
-            for a in alumni_qs.select_related("company").order_by(
-                "-is_super_alumni", "-willingness", "name"
-            )[:5]
-        ]
-
-        return Response({
-            "kpis": kpis,
-            "alumni_growth": alumni_growth,
-            "by_location": by_location,
-            "by_industry": by_industry,
-            "by_branch": by_branch,
-            "engagement": engagement,
-            "top_alumni": top_alumni,
-        })
+        resp["Content-Disposition"] = f'attachment; filename="{fname}"'
+        return resp

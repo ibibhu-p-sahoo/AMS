@@ -40,25 +40,35 @@ export default function Referrals() {
   const columns: ColumnDef<Referral>[] = [
     { key: "student_name", label: "Student", render: (r) => <span className="font-medium text-slate-800">{r.student_name || "—"}</span> },
     { key: "company_name", label: "Company", render: (r) => r.company_name || "—" },
-    { key: "alumni_name", label: "Referrer (alumnus)", render: (r) => r.alumni_name || "—" },
+    { key: "alumni_name", label: "Referred by (alumnus)", render: (r) => r.alumni_name || "—" },
     { key: "stage", label: "Stage", render: (r) => <Badge value={r.stage} /> },
-    { key: "outcome", label: "Outcome", render: (r) => <Badge value={r.outcome} /> },
+    { key: "outcome", label: "Result", render: (r) => <Badge value={r.outcome} /> },
     {
       key: "sla",
-      label: "SLA",
+      label: "Follow-up",
       render: (r) =>
         r.is_sla_breached ? (
-          <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">48h breached</span>
+          <span
+            title="No follow-up in the last 48 hours — please check in with this contact."
+            className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700"
+          >
+            ⏰ Needs follow-up
+          </span>
         ) : (
-          <span className="text-xs text-slate-400">ok</span>
+          <span
+            title="Followed up within the last 48 hours."
+            className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700"
+          >
+            ✓ On track
+          </span>
         ),
     },
   ];
 
   return (
     <ResourcePage<Referral>
-      title="Referral & Placement Pipeline"
-      subtitle="Link alumni ↔ student ↔ company through stages, with a 48-hour follow-up SLA"
+      title="Referrals & Placements"
+      subtitle="Track alumni referring students to companies — and see who needs a follow-up (no update in 48 hours)."
       endpoint="/referrals/"
       queryKey="referrals"
       columns={columns}
@@ -76,7 +86,7 @@ export default function Referrals() {
           className="mr-3 px-2 py-1 text-xs"
           onClick={async () => {
             await api.post(`/referrals/${row.id}/followup/`);
-            toast.success("Follow-up logged — 48h SLA clock reset");
+            toast.success("Follow-up saved ✓");
             refetch();
           }}
         >
@@ -86,7 +96,7 @@ export default function Referrals() {
       fields={[
         { name: "student", label: "Student", type: "select", options: students },
         { name: "company", label: "Company", type: "select", options: companies },
-        { name: "alumni", label: "Referrer (alumnus)", type: "select", options: alumni },
+        { name: "alumni", label: "Referred by (alumnus)", type: "select", options: alumni },
         { name: "stage", label: "Stage", type: "addable", options: STAGES },
         { name: "outcome", label: "Outcome", type: "addable", options: OUTCOMES },
         { name: "notes", label: "Notes", type: "textarea" },

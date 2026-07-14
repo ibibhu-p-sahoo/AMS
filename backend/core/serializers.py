@@ -51,6 +51,7 @@ class AlumniSerializer(serializers.ModelSerializer):
             "id", "name", "batch", "dob", "photo", "branch", "company", "company_name", "company_input",
             "role_level", "domain", "city", "email", "phone", "linkedin",
             "github", "twitter", "website", "bio", "skills", "interests",
+            "source", "referred_by",
             "status", "is_super_alumni", "willingness", "consent_given",
             "updated_by", "updated_by_name", "created_at", "updated_at",
         ]
@@ -80,7 +81,7 @@ class AlumniSubmissionSerializer(serializers.ModelSerializer):
         model = AlumniSubmission
         fields = [
             "id", "name", "email", "batch", "branch", "company", "role_level",
-            "domain", "city", "phone", "linkedin", "photo", "status",
+            "domain", "city", "phone", "linkedin", "source", "referred_by", "photo", "status",
             "reviewed_by", "reviewed_by_name", "created_at",
         ]
         read_only_fields = fields

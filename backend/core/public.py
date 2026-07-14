@@ -109,6 +109,8 @@ class PublicAlumniSerializer(serializers.Serializer):
     city = serializers.CharField(max_length=120, required=False, allow_blank=True)
     phone = serializers.CharField(max_length=30, required=False, allow_blank=True)
     linkedin = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    source = serializers.CharField(max_length=120, required=False, allow_blank=True)
+    referred_by = serializers.CharField(max_length=150, required=False, allow_blank=True)
     photo = serializers.CharField(required=False, allow_blank=True)
 
 
@@ -134,6 +136,8 @@ class PublicAlumniView(APIView):
             city=(d.get("city") or "").strip(),
             phone=(d.get("phone") or "").strip(),
             linkedin=(d.get("linkedin") or "").strip(),
+            source=(d.get("source") or "").strip(),
+            referred_by=(d.get("referred_by") or "").strip(),
             photo=(d.get("photo") or "").strip(),
         )
         return Response(

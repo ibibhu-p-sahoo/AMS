@@ -23,6 +23,8 @@ interface Alumnus {
   email: string;
   phone: string;
   linkedin: string;
+  source: string;
+  referred_by: string;
   status: string;
   is_super_alumni: boolean;
   willingness: number;
@@ -62,22 +64,24 @@ function linkedinUrl(v: string) {
 const FIELDS = [
   { name: "name",           label: "Name",                    required: true },
   { name: "batch",          label: "Batch (year)",            type: "number", required: true },
-  { name: "dob",            label: "Date of birth",           type: "date" },
+  { name: "dob",            label: "Date of birth",           type: "date", required: true },
   { name: "branch",         label: "Branch",                  type: "select", options: BRANCHES.map((b) => ({ value: b, label: b })), required: true },
-  { name: "company_input",  label: "Company",                 type: "company" },
-  { name: "domain",         label: "Domain" },
-  { name: "city",           label: "City" },
+  { name: "company_input",  label: "Company",                 type: "company", required: true },
+  { name: "domain",         label: "Domain",                  required: true },
+  { name: "city",           label: "City",                    required: true },
   { name: "email",          label: "Email",                   type: "email", required: true },
-  { name: "phone",          label: "Phone" },
-  { name: "linkedin",       label: "LinkedIn" },
-  { name: "status",         label: "Status",                  type: "select", options: [{ value: "active", label: "Active" }, { value: "passive", label: "Passive" }] },
-  { name: "role_level",     label: "Role level",              type: "select", options: ROLE_LEVELS },
-  { name: "willingness",    label: "Willingness (1–5)",       type: "number" },
+  { name: "phone",          label: "Phone",                   required: true },
+  { name: "linkedin",       label: "LinkedIn",                required: true },
+  { name: "source",         label: "Source",                  required: true },
+  { name: "referred_by",    label: "Referred by",             required: true },
+  { name: "status",         label: "Status",                  type: "select", options: [{ value: "active", label: "Active" }, { value: "passive", label: "Passive" }], required: true },
+  { name: "role_level",     label: "Role level",              type: "select", options: ROLE_LEVELS, required: true },
+  { name: "willingness",    label: "Willingness (1–5)",       type: "number", required: true },
 ] as const;
 
 const EMPTY_FORM: Record<string, unknown> = {
   name: "", batch: "", dob: "", photo: "", branch: "", company_input: "", domain: "", city: "",
-  email: "", phone: "", linkedin: "", status: "active",
+  email: "", phone: "", linkedin: "", source: "", referred_by: "", status: "active",
   role_level: "", willingness: "", is_super_alumni: false, consent_given: false,
 };
 
@@ -624,6 +628,8 @@ export default function Alumni() {
                 { label: "Role",     value: profileAlumnus.role_level || "—" },
                 { label: "City",     value: profileAlumnus.city || "—" },
                 { label: "Phone",    value: profileAlumnus.phone || "—" },
+                { label: "Source",   value: profileAlumnus.source || "—" },
+                { label: "Referred by", value: profileAlumnus.referred_by || "—" },
                 { label: "Willingness", value: profileAlumnus.willingness ? "★".repeat(profileAlumnus.willingness) : "—" },
               ].map((r) => (
                 <div key={r.label}>
@@ -701,6 +707,8 @@ export default function Alumni() {
                   {s.domain && <span>Domain: {s.domain}</span>}
                   {s.city && <span>City: {s.city}</span>}
                   {s.phone && <span>Phone: {s.phone}</span>}
+                  {s.source && <span>Source: {s.source}</span>}
+                  {s.referred_by && <span>Referred by: {s.referred_by}</span>}
                 </div>
               </div>
             ))}
@@ -767,6 +775,7 @@ export default function Alumni() {
                     onChange={(v) => setForm({ ...form, company_input: v })}
                     addLabel="➕ Add new company…"
                     placeholder="Type new company (e.g. TCS)"
+                    required={f.required}
                     onDelete={isAdmin ? (c) => deleteCompany.mutate(c) : undefined}
                   />
                 ) : f.name === "phone" ? (
@@ -797,6 +806,7 @@ export default function Alumni() {
                     onChange={(v) => setForm({ ...form, status: v })}
                     addLabel="➕ Add new status…"
                     placeholder="Type new status"
+                    required={f.required}
                     onDelete={isAdmin ? (v) => deleteAlumniValue.mutate({ field: "status", value: v, reassign_to: v === "active" ? "" : "active" }) : undefined}
                   />
                 ) : f.name === "role_level" ? (
@@ -806,6 +816,7 @@ export default function Alumni() {
                     onChange={(v) => setForm({ ...form, role_level: v })}
                     addLabel="➕ Add new role level…"
                     placeholder="Type new role level"
+                    required={f.required}
                     onDelete={isAdmin ? (v) => deleteAlumniValue.mutate({ field: "role_level", value: v, reassign_to: "" }) : undefined}
                   />
                 ) : f.type === "select" ? (

@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Area, AreaChart, CartesianGrid, Cell, Legend, Line, LineChart,
@@ -24,7 +25,16 @@ interface Analytics {
   by_branch: Slice[];
   engagement: { month: string; events: number; jobs: number }[];
   top_alumni: TopAlumnus[];
+  range?: { label: string; start: string; end: string };
 }
+
+type Period = "this_month" | "this_year" | "last_year" | "all" | "custom";
+const PERIOD_LABELS: Record<Exclude<Period, "custom">, string> = {
+  this_month: "This Month",
+  this_year: "This Year",
+  last_year: "Last Year",
+  all: "All Time",
+};
 
 const DONUT_COLORS = ["#6366f1", "#22c55e", "#f59e0b", "#ef4444", "#06b6d4", "#a855f7"];
 const ROLE_LABEL: Record<string, string> = {
@@ -106,10 +116,42 @@ function Donut({ title, data }: { title: string; data: Slice[] }) {
 }
 
 export default function Reports() {
-  const { data, isLoading } = useQuery({
-    queryKey: ["analytics"],
-    queryFn: async () => (await api.get<Analytics>("/analytics/")).data,
+  const [period, setPeriod] = useState<Period>("this_year");
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [downloading, setDownloading] = useState(false);
+
+  // Query params sent to the backend — custom range needs both dates.
+  const params = useMemo(() => {
+    if (period === "custom") {
+      return start && end ? { start, end } : {};
+    }
+    return { period };
+  }, [period, start, end]);
+
+  const { data, isLoading, isFetching } = useQuery({
+    queryKey: ["analytics", params],
+    queryFn: async () => (await api.get<Analytics>("/analytics/", { params })).data,
   });
+
+  async function downloadReport() {
+    setDownloading(true);
+    try {
+      const res = await api.get("/analytics/export/", { params, responseType: "blob" });
+      const url = URL.createObjectURL(res.data as Blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const cd = (res.headers as Record<string, string>)["content-disposition"] || "";
+      const match = cd.match(/filename="?([^"]+)"?/);
+      a.download = match ? match[1] : "analytics-report.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   if (isLoading || !data) {
     return (
@@ -128,17 +170,58 @@ export default function Reports() {
       <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Reports &amp; Analytics</h1>
-          <p className="mt-0.5 text-sm text-slate-400">Analyze and visualize alumni engagement and growth.</p>
+          <p className="mt-0.5 text-sm text-slate-400">
+            Analyze and visualize alumni engagement and growth.
+            {data.range && (
+              <span className="ml-1 font-medium text-slate-500">
+                · {data.range.label} ({data.range.start} → {data.range.end})
+              </span>
+            )}
+            {isFetching && <span className="ml-2 text-brand-500">updating…</span>}
+          </p>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-500 shadow-sm">
-            📅 This Year
-          </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 shadow-sm">
+            <span className="pl-1 text-sm">📅</span>
+            <select
+              value={period}
+              onChange={(e) => setPeriod(e.target.value as Period)}
+              className="cursor-pointer bg-transparent px-1 text-sm text-slate-600 focus:outline-none"
+            >
+              <option value="this_month">This Month</option>
+              <option value="this_year">This Year</option>
+              <option value="last_year">Last Year</option>
+              <option value="all">All Time</option>
+              <option value="custom">Custom range…</option>
+            </select>
+          </div>
+
+          {period === "custom" && (
+            <div className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2 py-1.5 shadow-sm">
+              <input
+                type="date"
+                value={start}
+                max={end || undefined}
+                onChange={(e) => setStart(e.target.value)}
+                className="bg-transparent px-1 text-sm text-slate-600 focus:outline-none"
+              />
+              <span className="text-slate-300">→</span>
+              <input
+                type="date"
+                value={end}
+                min={start || undefined}
+                onChange={(e) => setEnd(e.target.value)}
+                className="bg-transparent px-1 text-sm text-slate-600 focus:outline-none"
+              />
+            </div>
+          )}
+
           <button
-            onClick={() => window.print()}
-            className="flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-700"
+            onClick={downloadReport}
+            disabled={downloading || (period === "custom" && !(start && end))}
+            className="flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            ⬇ Download Report
+            {downloading ? "⏳ Preparing…" : "⬇ Download Report (Excel)"}
           </button>
         </div>
       </div>
